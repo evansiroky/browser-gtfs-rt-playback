@@ -4,19 +4,21 @@ A browser-based tool for playing back GTFS Realtime data. Proof of concept: ente
 Schedule URL and three GTFS-RT URLs; the schedule is downloaded and parsed in your browser and
 a summary (agency, routes, stops, service dates) is shown. The realtime URLs are not fetched yet.
 
+There is no build step: the repo root is the site.
+
 ```bash
-npm install
-npm run dev      # local dev server
-npm test         # unit tests
-npm run build    # static site in dist/
+npm start        # serve the site at http://localhost:8000
+npm test         # unit tests (Node 20+)
 ```
 
 The schedule host must allow cross-origin requests (CORS), since there is no proxy.
 
 ## Deployment
 
-`.github/workflows/deploy.yml` builds on every push and pull request and deploys to GitHub
-Pages from the default branch. Once, in the repo settings, set **Pages → Source** to
-**GitHub Actions**.
+GitHub Pages serves the root of the `main` branch (Settings → Pages → Deploy from a branch),
+so merging to `main` deploys. `.github/workflows/test.yml` runs the unit tests on pushes and
+pull requests.
+
+`src/vendor/fflate.js` is the vendored browser build of [fflate](https://github.com/101arrowz/fflate) (MIT).
 
 Behavior is specified in [`specs/`](specs/); work history is in [`plans/`](plans/).

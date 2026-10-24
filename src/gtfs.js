@@ -1,4 +1,4 @@
-import { unzipSync, strFromU8 } from 'fflate';
+import { unzipSync, strFromU8 } from './vendor/fflate.js';
 import { parseCsv } from './csv.js';
 
 export class GtfsError extends Error {}

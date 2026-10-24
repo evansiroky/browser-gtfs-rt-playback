@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { zipSync, strToU8 } from 'fflate';
+import { zipSync, strToU8 } from '../src/vendor/fflate.js';
 import { summarizeGtfs, GtfsError } from '../src/gtfs.js';
 
 const base = {
