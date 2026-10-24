@@ -1,11 +1,12 @@
 ---
-status: in-progress
+status: done
 depends: []
 specs:
   - specs/architecture.md
   - specs/screens/schedule-loader.md
   - specs/behaviors/gtfs-schedule-summary.md
 issues: []
+pr: 2
 ---
 
 # Plan: Schedule loader proof of concept
@@ -46,7 +47,7 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
 - [x] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
       HTTP status; a non-zip response shows the invalid-archive error.
 - [x] The test workflow is valid YAML, triggers on push and pull request, and does not deploy.
-- [ ] The GTFS-RT fields are optional: the form submits with only the schedule URL, lists
+- [x] The GTFS-RT fields are optional: the form submits with only the schedule URL, lists
       only the realtime URLs entered (omitting the section when none are), and still rejects a
       malformed URL in a filled-in realtime field.
 
@@ -64,7 +65,9 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
 - Verified with headless Chromium (Playwright) serving the raw repo root under `/repo/`:
   success, no-CORS, 404, non-zip, and empty-field validation cases matched the spec.
 - The test workflow's YAML was parsed locally but has not run on GitHub.
-- No PR existed at closeout, so `pr:` is unset; add it when the PR is opened.
+- Reopened after the first closeout to make the GTFS-RT fields optional (spec change in its own
+  `docs(specs):` commit); verified in headless Chromium: schedule only, one RT URL, malformed RT
+  URL (rejected), no schedule URL (rejected).
 - Only the needed files are inflated from the zip (`filter`), so large `stop_times.txt` files
   cost nothing.
 - Vendored fflate is 0.8.3; update by re-copying `esm/browser.js` from the npm package.
