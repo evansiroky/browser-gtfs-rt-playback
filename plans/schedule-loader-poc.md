@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 depends: []
 specs:
   - specs/architecture.md
@@ -37,15 +37,15 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
   `fflate`).
 
 ## Validation
-- [ ] `npm test` passes, covering quoted CSV fields, BOM/CRLF, calendar + calendar_dates
+- [x] `npm test` passes, covering quoted CSV fields, BOM/CRLF, calendar + calendar_dates
       range, unknown range, and missing required file.
-- [ ] The repo root, served by a plain static file server from a subpath with no build step,
+- [x] The repo root, served by a plain static file server from a subpath with no build step,
       works in a real browser.
-- [ ] In a real browser, submitting a locally served GTFS zip shows agency, route count, stop
+- [x] In a real browser, submitting a locally served GTFS zip shows agency, route count, stop
       count, and date range matching the fixture.
-- [ ] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
+- [x] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
       HTTP status; a non-zip response shows the invalid-archive error.
-- [ ] The test workflow is valid YAML, triggers on push and pull request, and does not deploy.
+- [x] The test workflow is valid YAML, triggers on push and pull request, and does not deploy.
 
 ## Risks / unknowns
 - **CORS** — many agency feeds block cross-origin requests; the PoC can't load those. Surfaced
@@ -55,4 +55,18 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
 
 ## Notes
 
+- Originally built with Vite + a Pages Actions deploy; reworked once the repo was configured to
+  deploy from the `main` root, which cannot serve bundler-style bare imports. The spec change
+  is in the `docs(specs):` commit ahead of the rework.
+- Verified with headless Chromium (Playwright) serving the raw repo root under `/repo/`:
+  success, no-CORS, 404, non-zip, and empty-field validation cases matched the spec.
+- The test workflow's YAML was parsed locally but has not run on GitHub.
+- No PR existed at closeout, so `pr:` is unset; add it when the PR is opened.
+- Only the needed files are inflated from the zip (`filter`), so large `stop_times.txt` files
+  cost nothing.
+- Vendored fflate is 0.8.3; update by re-copying `esm/browser.js` from the npm package.
+
 ## Follow-ups
+
+- Issue (to file) — fetch and decode the GTFS-RT feeds, then design the playback model
+  (architecture.md "Not yet decided").
