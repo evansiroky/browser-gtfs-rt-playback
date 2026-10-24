@@ -4,10 +4,11 @@ A browser-based tool for playing back GTFS Realtime data. Proof of concept: ente
 Schedule URL and three GTFS-RT URLs; the schedule is downloaded and parsed in your browser and
 a summary (agency, routes, stops, service dates) is shown. The realtime URLs are not fetched yet.
 
-There is no build step: the repo root is the site.
+There is no build step: the repo root is the site. It must be served over HTTP; opening
+`index.html` directly (`file://`) does not work because browsers block ES modules there.
 
 ```bash
-npm start        # serve the site at http://localhost:8000
+npm start        # serve the site at http://localhost:8000 (PORT=3000 npm start to change it)
 npm test         # unit tests (Node 20+)
 ```
 
