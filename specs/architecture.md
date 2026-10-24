@@ -27,8 +27,10 @@ A browser-based tool for playing back GTFS Realtime (GTFS-RT) data.
 - Feeds are fetched directly from the browser with `fetch`. There is no proxy, so a feed host
   that does not send CORS headers cannot be loaded; the UI reports this plainly (see
   [schedule-loader](screens/schedule-loader.md)).
-- The three GTFS-RT URLs are collected and retained alongside the schedule URL but are **not
-  fetched yet**. Fetching and playing back realtime data is future work.
+- The GTFS-RT URLs are optional. Each one entered is only *probed* to learn whether the
+  browser may read it cross-origin (see [schedule-loader](screens/schedule-loader.md)); the
+  feed body is neither downloaded in full nor decoded. Decoding and playing back realtime data
+  is future work.
 
 ## Hosting and deployment
 
