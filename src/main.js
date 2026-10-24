@@ -19,25 +19,32 @@ form.addEventListener('submit', async (event) => {
 
   errorEl.hidden = true;
   resultEl.hidden = true;
+  resultEl.replaceChildren();
   button.disabled = true;
+
+  // The schedule and the realtime checks are independent: a failure of either never hides the
+  // other. Blank realtime fields are neither checked nor warned about. Checks never reject.
+  const accessChecks = Promise.all(
+    Object.keys(RT_LABELS)
+      .filter((key) => urls[key])
+      .map(async (key) => [key, await checkFeedAccess(urls[key])]),
+  );
 
   try {
     setStatus('Downloading GTFS Schedule…');
-    // Blank realtime fields are neither checked nor warned about. Checks never reject.
-    const accessChecks = Promise.all(
-      Object.keys(RT_LABELS)
-        .filter((key) => urls[key])
-        .map(async (key) => [key, await checkFeedAccess(urls[key])]),
-    );
     const bytes = await download(urls.schedule);
     setStatus('Parsing GTFS Schedule…');
     // Let the status paint before the synchronous unzip/parse blocks the thread.
     await new Promise((resolve) => setTimeout(resolve));
-    const summary = summarizeGtfs(bytes);
-    renderResult(summary, urls, Object.fromEntries(await accessChecks));
+    renderSummary(summarizeGtfs(bytes));
   } catch (err) {
     errorEl.textContent = err.message;
     errorEl.hidden = false;
+  }
+
+  try {
+    setStatus('Checking realtime feeds…');
+    renderRealtime(urls, Object.fromEntries(await accessChecks));
   } finally {
     setStatus(null);
     button.disabled = false;
@@ -65,9 +72,7 @@ function setStatus(text) {
   statusEl.hidden = text == null;
 }
 
-function renderResult(summary, urls, access) {
-  resultEl.replaceChildren();
-
+function renderSummary(summary) {
   resultEl.append(el('h2', 'Schedule summary'));
 
   for (const agency of summary.agencies) {
@@ -79,26 +84,28 @@ function renderResult(summary, urls, access) {
   resultEl.append(
     row('Service dates', summary.serviceStart ? `${summary.serviceStart} to ${summary.serviceEnd}` : 'unknown'),
   );
+  resultEl.hidden = false;
+}
 
+function renderRealtime(urls, access) {
   const realtime = Object.entries(RT_LABELS).filter(([key]) => urls[key]);
-  if (realtime.length) {
-    resultEl.append(el('h2', 'Realtime feeds'), el('p', 'Contents are not read yet.', 'note'));
-    for (const [key, label] of realtime) {
-      resultEl.append(row(label, urls[key]));
-      if (access[key] === false) {
-        resultEl.append(
-          el(
-            'p',
-            `${label}: could not reach this feed. The most likely cause is that the host does not allow ` +
-              'cross-origin requests (CORS); other causes are a bad URL, no response within 10 seconds, ' +
-              'or no network connection.',
-            'warning',
-          ),
-        );
-      }
+  if (!realtime.length) return;
+
+  resultEl.append(el('h2', 'Realtime feeds'), el('p', 'Contents are not read yet.', 'note'));
+  for (const [key, label] of realtime) {
+    resultEl.append(row(label, urls[key]));
+    if (access[key] === false) {
+      resultEl.append(
+        el(
+          'p',
+          `${label}: could not reach this feed. The most likely cause is that the host does not allow ` +
+            'cross-origin requests (CORS); other causes are a bad URL, no response within 10 seconds, ' +
+            'or no network connection.',
+          'warning',
+        ),
+      );
     }
   }
-
   resultEl.hidden = false;
 }
 
