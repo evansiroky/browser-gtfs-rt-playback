@@ -72,8 +72,11 @@ function renderResult(summary, urls) {
     row('Service dates', summary.serviceStart ? `${summary.serviceStart} to ${summary.serviceEnd}` : 'unknown'),
   );
 
-  resultEl.append(el('h2', 'Realtime feeds'), el('p', 'Recorded but not fetched yet.', 'note'));
-  for (const [key, label] of Object.entries(RT_LABELS)) resultEl.append(row(label, urls[key]));
+  const realtime = Object.entries(RT_LABELS).filter(([key]) => urls[key]);
+  if (realtime.length) {
+    resultEl.append(el('h2', 'Realtime feeds'), el('p', 'Recorded but not fetched yet.', 'note'));
+    for (const [key, label] of realtime) resultEl.append(row(label, urls[key]));
+  }
 
   resultEl.hidden = false;
 }
