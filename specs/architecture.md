@@ -15,6 +15,10 @@ A browser-based tool for playing back GTFS Realtime (GTFS-RT) data.
 - The one third-party library, `fflate` (for unzipping the GTFS Schedule archive), is vendored
   into the repository as a single ES module with its license, so the site has no install step
   and no runtime network dependency beyond the user's feeds.
+- The site must be served over HTTP(S), including during local development: browsers refuse
+  to load ES modules from `file://`, so opening `index.html` directly from the filesystem is
+  not supported. The repository provides a zero-dependency local server (needing only Node,
+  which the tests already require), documented in the README.
 - GTFS CSV parsing is done in-house; the proof of concept needs only a small, RFC 4180
   compatible subset (quoted fields, escaped quotes, CRLF/LF, UTF-8 BOM).
 
