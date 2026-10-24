@@ -21,26 +21,32 @@ realtime fields, including none, may be left empty. A realtime field that is fil
 still be a valid URL.
 
 **Status.** While loading, the submit button is disabled and a status line says what stage is
-running: downloading, then parsing. On failure, an error message replaces the status line
-and names the cause (see Errors). Submitting again clears the previous result and error.
+running: downloading, then parsing, then (only while any realtime check is still outstanding)
+checking realtime feeds. A schedule failure shows an error message naming the cause (see
+Errors) as soon as it happens, without waiting for the realtime checks. Submitting again
+clears the previous result and error.
 
-**Result.** After a successful load, show a summary with:
+**Result.** The result has two independent parts. The schedule summary appears only after a
+successful load. The realtime feeds section appears whenever any realtime URL was entered,
+whether or not the schedule loaded. The summary contains:
 - **Agency** — one entry per row of `agency.txt`: name, URL, timezone (omit fields that are
   empty).
 - **Routes** — count of routes.
 - **Stops** — count of stops.
 - **Service dates** — first and last date of service, formatted `YYYY-MM-DD`, as defined in
   the behavior spec; or "unknown" when the feed defines no service dates.
-- **Realtime feeds** — the GTFS-RT URLs that were entered, labeled by feed type, noting
-  their contents are not read yet. Feeds left empty are not listed and not checked; when none
-  were entered, this section is omitted. A feed whose access check failed shows its own
-  warning directly under its entry (see Realtime access check); feeds that passed show no
-  message.
+
+The realtime feeds section lists the GTFS-RT URLs that were entered, labeled by feed type, noting
+their contents are not read yet. Feeds left empty are not listed and not checked; when none
+were entered, this section is omitted. A feed whose access check failed shows its own
+warning directly under its entry (see Realtime access check); feeds that passed show no
+message. When the schedule failed, the error appears first and this section follows it.
 
 ## Actions
 - **Submit** — validates the fields (native browser validation is sufficient), then downloads
-  and parses the schedule in the browser and renders the result or an error. Each entered
-  realtime URL is access-checked at the same time as the schedule download.
+  and parses the schedule in the browser and renders the summary or an error. Each entered
+  realtime URL is access-checked at the same time as the schedule download, and its outcome is
+  shown whether or not the schedule loads.
 
 ## Errors
 Failures are shown as a single message, distinguishing at least:
@@ -62,8 +68,11 @@ response from it:
   possible causes (bad URL, timeout, no network). Two failing feeds produce two warnings.
 - Empty fields are never checked and never warn.
 - A warning is not an error: the schedule summary still shows, and one feed's result does not
-  affect another's. If the schedule itself fails to load, its error replaces the result and
-  no realtime warnings are shown.
+  affect another's.
+- The schedule and the realtime feeds are independent. A schedule failure of any kind (CORS
+  included) never suppresses the realtime checks or their warnings, and a realtime failure
+  never suppresses the schedule summary. A user whose schedule host blocks CORS should still
+  learn which of their realtime hosts do too.
 
 ## Navigation
 None; single screen.
