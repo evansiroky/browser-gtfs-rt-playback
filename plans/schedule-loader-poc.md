@@ -1,5 +1,5 @@
 ---
-status: done
+status: in-progress
 depends: []
 specs:
   - specs/architecture.md
@@ -11,10 +11,10 @@ issues: []
 # Plan: Schedule loader proof of concept
 
 ## Scope
-In: a Vite site with a form for a GTFS Schedule URL and three GTFS-RT URLs; in-browser
+In: a buildless static site with a form for a GTFS Schedule URL and three GTFS-RT URLs; in-browser
 download, unzip, and parse of the schedule; display of agency info, route count, stop count,
 and service date range; unit tests for the parser/summary; a GitHub Actions workflow that
-deploys to GitHub Pages.
+runs the tests. Deployment is GitHub Pages from the `main` root, so there is no deploy workflow.
 
 Out: fetching or playing back the GTFS-RT feeds (the URLs are only collected and echoed), CORS
 proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations.
@@ -25,45 +25,34 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
 - `specs/behaviors/gtfs-schedule-summary.md` — CSV parsing, counts, service date range.
 
 ## Approach
+- `src/vendor/fflate.js` — vendored `fflate` browser ES module (+ license), imported by relative
+  path; no npm dependencies remain.
 - `src/csv.js` — small RFC 4180 parser returning row objects keyed by header.
-- `src/gtfs.js` — `summarizeGtfs(zipBytes)`: `fflate.unzipSync`, parse the needed files,
-  compute the summary; throws typed errors for bad zip / missing files.
+- `src/gtfs.js` — `summarizeGtfs(zipBytes)`: `unzipSync`, parse the needed files, compute the
+  summary; throws typed errors for bad zip / missing files.
 - `src/main.js` — form handling, `fetch`, status/error/result rendering.
-- `index.html`, `src/style.css` — minimal markup and styling.
-- `vite.config.js` with `base: './'` for subpath hosting.
-- `.github/workflows/deploy.yml` — build on push/PR, deploy to Pages from the default branch
-  via `actions/deploy-pages`.
-- Tests with `node --test` against `csv.js` and `gtfs.js` (zip built in-test with `fflate`).
+- Root `index.html` and `src/style.css`, all with relative URLs.
+- `.github/workflows/test.yml` — run `npm test` on push and pull request.
+- Tests with `node --test` against `csv.js` and `gtfs.js` (zips built in-test with the vendored
+  `fflate`).
 
 ## Validation
-- [x] `npm test` passes, covering quoted CSV fields, BOM/CRLF, calendar + calendar_dates
+- [ ] `npm test` passes, covering quoted CSV fields, BOM/CRLF, calendar + calendar_dates
       range, unknown range, and missing required file.
-- [x] `npm run build` succeeds and the built site works from a subpath.
-- [x] In a real browser, submitting a locally served GTFS zip shows agency, route count, stop
+- [ ] The repo root, served by a plain static file server from a subpath with no build step,
+      works in a real browser.
+- [ ] In a real browser, submitting a locally served GTFS zip shows agency, route count, stop
       count, and date range matching the fixture.
-- [x] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
+- [ ] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
       HTTP status; a non-zip response shows the invalid-archive error.
-- [x] The deploy workflow is valid YAML and builds on pull requests but deploys only from the
-      default branch.
+- [ ] The test workflow is valid YAML, triggers on push and pull request, and does not deploy.
 
 ## Risks / unknowns
 - **CORS** — many agency feeds block cross-origin requests; the PoC can't load those. Surfaced
   in the UI rather than worked around.
-- **Pages must be enabled** — the repo's Pages source needs to be set to "GitHub Actions" once
-  by a repo admin; the workflow can't do that itself.
+- **Pages source** — the repo's Pages is configured to deploy from the `main` root, so the
+  site only goes live once this work is on `main`.
 
 ## Notes
 
-- Verified with headless Chromium (Playwright) against the built `dist/` served under `/repo/`:
-  success, no-CORS, 404, non-zip, and empty-field validation cases all matched the spec.
-- The deploy workflow's YAML was parsed locally but has not run on GitHub; the first real
-  deploy happens after merge to the default branch and Pages is enabled.
-- No PR existed at closeout, so `pr:` is unset; add it when the PR is opened.
-- Only the needed files are inflated from the zip (`filter`), so large `stop_times.txt` files
-  cost nothing.
-
 ## Follow-ups
-
-- Issue (to file) — fetch and decode the GTFS-RT feeds, then design the playback model
-  (architecture.md "Not yet decided").
-- Tracked as: repo admin must set Pages source to "GitHub Actions" before the first deploy.
