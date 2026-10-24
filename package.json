@@ -1,0 +1,18 @@
+{
+  "name": "browser-gtfs-rt-playback",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "vite": "^8.0.0"
+  }
+}

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GTFS-RT Playback</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>GTFS-RT Playback</h1>
+      <p class="lede">Enter a transit agency's feeds. The schedule is downloaded and parsed entirely in your browser.</p>
+
+      <form id="feeds">
+        <label>GTFS Schedule URL (.zip)
+          <input type="url" name="schedule" required placeholder="https://example.com/gtfs.zip" />
+        </label>
+        <label>GTFS-RT Trip Updates URL
+          <input type="url" name="tripUpdates" required placeholder="https://example.com/trip-updates" />
+        </label>
+        <label>GTFS-RT Vehicle Positions URL
+          <input type="url" name="vehiclePositions" required placeholder="https://example.com/vehicle-positions" />
+        </label>
+        <label>GTFS-RT Service Alerts URL
+          <input type="url" name="serviceAlerts" required placeholder="https://example.com/service-alerts" />
+        </label>
+        <button type="submit">Load feeds</button>
+      </form>
+
+      <p id="status" role="status" hidden></p>
+      <p id="error" role="alert" hidden></p>
+      <section id="result" hidden></section>
+    </main>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
