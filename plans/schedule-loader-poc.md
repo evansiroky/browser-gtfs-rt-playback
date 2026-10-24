@@ -1,5 +1,5 @@
 ---
-status: done
+status: in-progress
 depends: []
 specs:
   - specs/architecture.md
@@ -11,7 +11,7 @@ issues: []
 # Plan: Schedule loader proof of concept
 
 ## Scope
-In: a buildless static site with a form for a GTFS Schedule URL and three GTFS-RT URLs; in-browser
+In: a buildless static site with a form for a GTFS Schedule URL and three optional GTFS-RT URLs; in-browser
 download, unzip, and parse of the schedule; display of agency info, route count, stop count,
 and service date range; unit tests for the parser/summary; a GitHub Actions workflow that
 runs the tests. Deployment is GitHub Pages from the `main` root, so there is no deploy workflow.
@@ -46,6 +46,9 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
 - [x] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
       HTTP status; a non-zip response shows the invalid-archive error.
 - [x] The test workflow is valid YAML, triggers on push and pull request, and does not deploy.
+- [ ] The GTFS-RT fields are optional: the form submits with only the schedule URL, lists
+      only the realtime URLs entered (omitting the section when none are), and still rejects a
+      malformed URL in a filled-in realtime field.
 
 ## Risks / unknowns
 - **CORS** — many agency feeds block cross-origin requests; the PoC can't load those. Surfaced
