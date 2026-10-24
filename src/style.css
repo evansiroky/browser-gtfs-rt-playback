@@ -12,3 +12,4 @@ button:disabled { cursor: progress; }
 .row .label { flex: 0 0 9rem; font-weight: 600; }
 .row span:last-child { overflow-wrap: anywhere; }
 .note { color: GrayText; margin: 0 0 0.5rem; }
+.warning { color: #b25e00; margin: 0.25rem 0 0.5rem; font-size: 0.9rem; }
