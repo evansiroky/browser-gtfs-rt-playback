@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 depends: []
 specs:
   - specs/architecture.md
@@ -36,14 +36,14 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
 - Tests with `node --test` against `csv.js` and `gtfs.js` (zip built in-test with `fflate`).
 
 ## Validation
-- [ ] `npm test` passes, covering quoted CSV fields, BOM/CRLF, calendar + calendar_dates
+- [x] `npm test` passes, covering quoted CSV fields, BOM/CRLF, calendar + calendar_dates
       range, unknown range, and missing required file.
-- [ ] `npm run build` succeeds and the built site works from a subpath.
-- [ ] In a real browser, submitting a locally served GTFS zip shows agency, route count, stop
+- [x] `npm run build` succeeds and the built site works from a subpath.
+- [x] In a real browser, submitting a locally served GTFS zip shows agency, route count, stop
       count, and date range matching the fixture.
-- [ ] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
+- [x] A cross-origin URL without CORS headers shows the CORS-flavored error; a 404 shows the
       HTTP status; a non-zip response shows the invalid-archive error.
-- [ ] The deploy workflow is valid YAML and builds on pull requests but deploys only from the
+- [x] The deploy workflow is valid YAML and builds on pull requests but deploys only from the
       default branch.
 
 ## Risks / unknowns
@@ -54,4 +54,16 @@ proxying, `frequencies`/`feed_info` handling, large-feed streaming optimizations
 
 ## Notes
 
+- Verified with headless Chromium (Playwright) against the built `dist/` served under `/repo/`:
+  success, no-CORS, 404, non-zip, and empty-field validation cases all matched the spec.
+- The deploy workflow's YAML was parsed locally but has not run on GitHub; the first real
+  deploy happens after merge to the default branch and Pages is enabled.
+- No PR existed at closeout, so `pr:` is unset; add it when the PR is opened.
+- Only the needed files are inflated from the zip (`filter`), so large `stop_times.txt` files
+  cost nothing.
+
 ## Follow-ups
+
+- Issue (to file) — fetch and decode the GTFS-RT feeds, then design the playback model
+  (architecture.md "Not yet decided").
+- Tracked as: repo admin must set Pages source to "GitHub Actions" before the first deploy.
