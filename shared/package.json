@@ -17,7 +17,8 @@
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
-    "test": "vitest run",
-    "build": "tsc -b"
+    "test": "tsc -b && vitest run",
+    "build": "tsc -b",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   }
 }

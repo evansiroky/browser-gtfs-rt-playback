@@ -5,7 +5,8 @@
     "lib": ["ES2023"],
     "types": [],
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test-d.ts"]
