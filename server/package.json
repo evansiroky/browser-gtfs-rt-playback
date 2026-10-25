@@ -1,0 +1,20 @@
+{
+  "name": "@gtfs-rt-debugger/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "tsc -b && vitest run",
+    "build": "tsc -b",
+    "start": "node dist/main.js",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.7",
+    "fastify": "^5.12.7",
+    "gtfs-realtime-bindings": "^2.2.0"
+  }
+}
