@@ -33,9 +33,11 @@ export class MemoryBudget {
   }
 }
 
-/** Heap estimate for a string: header plus one byte per character (GTFS text is nearly all ASCII). */
+const NOT_LATIN1 = /[^\u0000-\u00ff]/;
+
+/** Heap estimate for a string: header plus one byte per character, two if it has any beyond Latin-1. */
 export function stringBytes(value: string): number {
-  return 24 + value.length;
+  return 24 + (NOT_LATIN1.test(value) ? 2 : 1) * value.length;
 }
 
 /** Heap estimate for a parsed CSV row: the object and its values (the keys are shared). */
