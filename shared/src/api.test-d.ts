@@ -1,21 +1,45 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type {
+  API_ERROR_CODES,
   ApiErrorBody,
   ApiErrorCode,
+  CONFIGURATION_ERROR_CODES,
   DashboardResponse,
+  EpochSeconds,
   FeedStatus,
+  LIST_NAMES,
   ListName,
   Ping,
+  ServiceDate,
   SessionStatus,
   ShapeResponse,
+  StatusError,
+  TRIP_REASONS,
+  TripClassification,
   TripDetailResponse,
+  TripFrequencyDetail,
+  TripListFrequency,
   TripListItem,
   TripListResponse,
   TripReason,
+  TripScheduleDetail,
+  TripUpdateSummary,
 } from './api.js';
 
-describe('error envelope', () => {
-  it('pins the codes of conventions.md', () => {
+// Each shape is pinned as a whole object literal, so a changed type, a changed nullability, an
+// optional field, or an added or removed field all fail. Keep these in step with specs/api/*.md.
+
+type Row = { [column: string]: string };
+
+describe('primitives', () => {
+  it('pins the scalar aliases', () => {
+    expectTypeOf<EpochSeconds>().toEqualTypeOf<number>();
+    expectTypeOf<ServiceDate>().toEqualTypeOf<string>();
+  });
+});
+
+describe('error envelope (conventions.md)', () => {
+  it('pins the codes and the envelope', () => {
     expectTypeOf<ApiErrorCode>().toEqualTypeOf<
       | 'bad_request'
       | 'trip_not_found'
@@ -25,85 +49,90 @@ describe('error envelope', () => {
       | 'rate_limited'
       | 'internal_error'
     >();
+    expectTypeOf<typeof API_ERROR_CODES>().toEqualTypeOf<
+      readonly [
+        'bad_request',
+        'trip_not_found',
+        'shape_not_found',
+        'session_not_active',
+        'schedule_not_ready',
+        'rate_limited',
+        'internal_error',
+      ]
+    >();
     expectTypeOf<ApiErrorBody>().toEqualTypeOf<{
       error: { code: ApiErrorCode; message: string };
     }>();
   });
 });
 
-describe('session', () => {
-  it('pins SessionStatus', () => {
-    expectTypeOf<SessionStatus['state']>().toEqualTypeOf<'dormant' | 'active'>();
-    expectTypeOf<SessionStatus['endedReason']>().toEqualTypeOf<'idle' | 'max-duration' | null>();
-    expectTypeOf<SessionStatus['activatedAt']>().toEqualTypeOf<number | null>();
-    expectTypeOf<SessionStatus['expiresAt']>().toEqualTypeOf<number | null>();
-    expectTypeOf<SessionStatus['historyStartsAt']>().toEqualTypeOf<number | null>();
-    expectTypeOf<SessionStatus['schedule']['state']>().toEqualTypeOf<
-      'idle' | 'loading' | 'ready' | 'failed'
-    >();
-    expectTypeOf<SessionStatus['schedule']['error']>().toEqualTypeOf<{
-      code: string;
-      message: string;
-    } | null>();
-    expectTypeOf<
-      SessionStatus['realtime']['vehiclePositions']
-    >().toEqualTypeOf<FeedStatus | null>();
-    expectTypeOf<SessionStatus['realtime']['tripUpdates']>().toEqualTypeOf<FeedStatus | null>();
-    expectTypeOf<keyof SessionStatus>().toEqualTypeOf<
-      | 'state'
-      | 'endedReason'
-      | 'activatedAt'
-      | 'expiresAt'
-      | 'historyStartsAt'
-      | 'schedule'
-      | 'realtime'
-    >();
-  });
-
-  it('pins FeedStatus', () => {
-    expectTypeOf<keyof FeedStatus>().toEqualTypeOf<
-      'lastAttemptAt' | 'lastSuccessAt' | 'feedTimestamp' | 'stale' | 'error'
-    >();
-    expectTypeOf<FeedStatus['stale']>().toEqualTypeOf<boolean>();
-    expectTypeOf<FeedStatus['lastSuccessAt']>().toEqualTypeOf<number | null>();
-  });
-});
-
-describe('dashboard', () => {
-  it('pins DashboardResponse', () => {
-    expectTypeOf<keyof DashboardResponse>().toEqualTypeOf<
-      'now' | 'agency' | 'schedule' | 'realtime' | 'lists' | 'configurationErrors'
-    >();
-    expectTypeOf<DashboardResponse['agency']>().toEqualTypeOf<{
-      names: string[];
-      timezone: string;
-    } | null>();
-    expectTypeOf<DashboardResponse['schedule']>().toEqualTypeOf<{
-      tripsToday: number;
-      tripsActiveNow: number;
-    } | null>();
-    expectTypeOf<DashboardResponse['realtime']>().toEqualTypeOf<{
-      vehicles: number | null;
-      vehiclesWithTripId: number | null;
-      tripUpdates: number | null;
-      activeTripsWithRealtime: number | null;
+describe('session.md', () => {
+  it('pins StatusError and FeedStatus', () => {
+    expectTypeOf<StatusError>().toEqualTypeOf<{ code: string; message: string }>();
+    expectTypeOf<FeedStatus>().toEqualTypeOf<{
+      lastAttemptAt: number | null;
+      lastSuccessAt: number | null;
+      feedTimestamp: number | null;
+      stale: boolean;
+      error: { code: string; message: string } | null;
     }>();
-    expectTypeOf<DashboardResponse['lists']>().toEqualTypeOf<{
-      activeWithRealtime: number;
-      activeWithoutRealtime: number;
-      unscheduledWithRealtime: number;
-    } | null>();
-    expectTypeOf<DashboardResponse['configurationErrors']>().toEqualTypeOf<{
-      total: number;
-      items: { code: 'mixed_exact_times'; tripId: string; message: string }[];
-    } | null>();
+  });
+
+  it('pins SessionStatus', () => {
+    expectTypeOf<SessionStatus>().toEqualTypeOf<{
+      state: 'dormant' | 'active';
+      endedReason: 'idle' | 'max-duration' | null;
+      activatedAt: number | null;
+      expiresAt: number | null;
+      historyStartsAt: number | null;
+      schedule: {
+        state: 'idle' | 'loading' | 'ready' | 'failed';
+        loadedAt: number | null;
+        error: { code: string; message: string } | null;
+      };
+      realtime: {
+        vehiclePositions: FeedStatus | null;
+        tripUpdates: FeedStatus | null;
+      };
+    }>();
   });
 });
 
-describe('trip list', () => {
+describe('dashboard.md', () => {
+  it('pins DashboardResponse', () => {
+    expectTypeOf<DashboardResponse>().toEqualTypeOf<{
+      now: number;
+      agency: { names: string[]; timezone: string } | null;
+      schedule: { tripsToday: number; tripsActiveNow: number } | null;
+      realtime: {
+        vehicles: number | null;
+        vehiclesWithTripId: number | null;
+        tripUpdates: number | null;
+        activeTripsWithRealtime: number | null;
+      };
+      lists: {
+        activeWithRealtime: number;
+        activeWithoutRealtime: number;
+        unscheduledWithRealtime: number;
+      } | null;
+      configurationErrors: {
+        total: number;
+        items: { code: 'mixed_exact_times'; tripId: string; message: string }[];
+      } | null;
+    }>();
+    expectTypeOf<typeof CONFIGURATION_ERROR_CODES>().toEqualTypeOf<
+      readonly ['mixed_exact_times']
+    >();
+  });
+});
+
+describe('trips.md: list', () => {
   it('pins the enums', () => {
     expectTypeOf<ListName>().toEqualTypeOf<
       'active-with-realtime' | 'active-without-realtime' | 'unscheduled-with-realtime'
+    >();
+    expectTypeOf<typeof LIST_NAMES>().toEqualTypeOf<
+      readonly ['active-with-realtime', 'active-without-realtime', 'unscheduled-with-realtime']
     >();
     expectTypeOf<TripReason>().toEqualTypeOf<
       | 'unknown_trip'
@@ -113,76 +142,68 @@ describe('trip list', () => {
       | 'unmatched_start_time'
       | 'outside_scheduled_time'
     >();
+    expectTypeOf<typeof TRIP_REASONS>().toEqualTypeOf<
+      readonly [
+        'unknown_trip',
+        'configuration_error',
+        'not_in_service',
+        'missing_start_time',
+        'unmatched_start_time',
+        'outside_scheduled_time',
+      ]
+    >();
   });
 
-  it('pins TripListResponse and TripListItem', () => {
-    expectTypeOf<keyof TripListResponse>().toEqualTypeOf<'list' | 'generatedAt' | 'trips'>();
-    expectTypeOf<TripListResponse['trips']>().toEqualTypeOf<TripListItem[]>();
-    expectTypeOf<keyof TripListItem>().toEqualTypeOf<
-      | 'tripId'
-      | 'serviceDate'
-      | 'routeId'
-      | 'routeShortName'
-      | 'routeLongName'
-      | 'headsign'
-      | 'scheduledStart'
-      | 'scheduledEnd'
-      | 'frequency'
-      | 'realtime'
-      | 'reason'
-    >();
-    expectTypeOf<TripListItem['routeId']>().toEqualTypeOf<string | null>();
-    expectTypeOf<TripListItem['scheduledStart']>().toEqualTypeOf<number | null>();
-    expectTypeOf<TripListItem['reason']>().toEqualTypeOf<TripReason | null>();
-    expectTypeOf<TripListItem['frequency']>().toEqualTypeOf<{
+  it('pins TripListFrequency and TripListItem', () => {
+    expectTypeOf<TripListFrequency>().toEqualTypeOf<{
       exactTimes: boolean;
       headwaySecs: number;
       windowStart: number;
       windowEnd: number;
-    } | null>();
-    expectTypeOf<TripListItem['realtime']>().toEqualTypeOf<{
-      vehicleIds: string[];
-      hasVehiclePosition: boolean;
-      hasTripUpdate: boolean;
-      startTime: string | null;
-      lastSeenAt: number | null;
-    } | null>();
+    }>();
+    expectTypeOf<TripListItem>().toEqualTypeOf<{
+      tripId: string;
+      serviceDate: string;
+      routeId: string | null;
+      routeShortName: string | null;
+      routeLongName: string | null;
+      headsign: string | null;
+      scheduledStart: number | null;
+      scheduledEnd: number | null;
+      frequency: TripListFrequency | null;
+      realtime: {
+        vehicleIds: string[];
+        hasVehiclePosition: boolean;
+        hasTripUpdate: boolean;
+        startTime: string | null;
+        lastSeenAt: number | null;
+      } | null;
+      reason: TripReason | null;
+    }>();
+  });
+
+  it('pins TripListResponse', () => {
+    expectTypeOf<TripListResponse>().toEqualTypeOf<{
+      list: ListName;
+      generatedAt: number;
+      trips: TripListItem[];
+    }>();
   });
 });
 
-describe('trip detail', () => {
-  it('pins TripDetailResponse', () => {
-    expectTypeOf<keyof TripDetailResponse>().toEqualTypeOf<
-      'tripId' | 'serviceDate' | 'classification' | 'scheduled' | 'realtime'
-    >();
-    expectTypeOf<TripDetailResponse['classification'][number]>().toEqualTypeOf<{
+describe('trips.md: detail', () => {
+  it('pins TripClassification', () => {
+    expectTypeOf<TripClassification>().toEqualTypeOf<{
       list: ListName;
       reason: TripReason | null;
       start: number | null;
       end: number | null;
     }>();
+  });
 
-    type Scheduled = NonNullable<TripDetailResponse['scheduled']>;
-    expectTypeOf<TripDetailResponse['scheduled']>().toEqualTypeOf<Scheduled | null>();
-    expectTypeOf<keyof Scheduled>().toEqualTypeOf<
-      | 'trip'
-      | 'route'
-      | 'operatesOnServiceDate'
-      | 'start'
-      | 'end'
-      | 'activeNow'
-      | 'shapeId'
-      | 'frequencies'
-      | 'configurationErrors'
-    >();
-    expectTypeOf<Scheduled['trip']>().toEqualTypeOf<Record<string, string>>();
-    expectTypeOf<Scheduled['route']>().toEqualTypeOf<Record<string, string> | null>();
-    expectTypeOf<Scheduled['shapeId']>().toEqualTypeOf<string | null>();
-    expectTypeOf<Scheduled['configurationErrors']>().toEqualTypeOf<
-      { code: 'mixed_exact_times'; message: string }[]
-    >();
-    expectTypeOf<NonNullable<Scheduled['frequencies']>[number]>().toEqualTypeOf<{
-      row: Record<string, string>;
+  it('pins TripFrequencyDetail', () => {
+    expectTypeOf<TripFrequencyDetail>().toEqualTypeOf<{
+      row: Row;
       exactTimes: boolean;
       headwaySecs: number;
       windowStart: number;
@@ -191,48 +212,51 @@ describe('trip detail', () => {
       activeNow: boolean;
       activeInstanceStarts: number[];
     }>();
-    expectTypeOf<Scheduled['frequencies']>().toEqualTypeOf<NonNullable<
-      Scheduled['frequencies']
-    > | null>();
+  });
+
+  it('pins TripScheduleDetail', () => {
+    expectTypeOf<TripScheduleDetail>().toEqualTypeOf<{
+      trip: Row;
+      route: Row | null;
+      operatesOnServiceDate: boolean;
+      start: number | null;
+      end: number | null;
+      activeNow: boolean;
+      shapeId: string | null;
+      frequencies: TripFrequencyDetail[] | null;
+      configurationErrors: { code: 'mixed_exact_times'; message: string }[];
+    }>();
   });
 
   it('pins Ping', () => {
-    expectTypeOf<keyof Ping>().toEqualTypeOf<
-      | 'sequence'
-      | 'receivedAt'
-      | 'timestamp'
-      | 'vehicleId'
-      | 'vehicleLabel'
-      | 'licensePlate'
-      | 'latitude'
-      | 'longitude'
-      | 'bearing'
-      | 'odometer'
-      | 'speed'
-      | 'currentStopSequence'
-      | 'stopId'
-      | 'currentStatus'
-      | 'congestionLevel'
-      | 'occupancyStatus'
-      | 'occupancyPercentage'
-      | 'scheduleRelationship'
-      | 'routeId'
-      | 'directionId'
-      | 'startTime'
-      | 'startDate'
-    >();
-    expectTypeOf<Ping['sequence']>().toEqualTypeOf<number>();
-    expectTypeOf<Ping['vehicleId']>().toEqualTypeOf<string>();
-    expectTypeOf<Ping['latitude']>().toEqualTypeOf<number | null>();
-    expectTypeOf<Ping['directionId']>().toEqualTypeOf<number | null>();
-    expectTypeOf<Ping['startDate']>().toEqualTypeOf<string | null>();
+    expectTypeOf<Ping>().toEqualTypeOf<{
+      sequence: number;
+      receivedAt: number;
+      timestamp: number;
+      vehicleId: string;
+      vehicleLabel: string | null;
+      licensePlate: string | null;
+      latitude: number | null;
+      longitude: number | null;
+      bearing: number | null;
+      odometer: number | null;
+      speed: number | null;
+      currentStopSequence: number | null;
+      stopId: string | null;
+      currentStatus: string | null;
+      congestionLevel: string | null;
+      occupancyStatus: string | null;
+      occupancyPercentage: number | null;
+      scheduleRelationship: string | null;
+      routeId: string | null;
+      directionId: number | null;
+      startTime: string | null;
+      startDate: string | null;
+    }>();
   });
 
-  it('pins the realtime block', () => {
-    type Realtime = TripDetailResponse['realtime'];
-    expectTypeOf<keyof Realtime>().toEqualTypeOf<'pings' | 'tripUpdate'>();
-    expectTypeOf<Realtime['pings']>().toEqualTypeOf<Ping[]>();
-    expectTypeOf<Realtime['tripUpdate']>().toEqualTypeOf<{
+  it('pins TripUpdateSummary', () => {
+    expectTypeOf<TripUpdateSummary>().toEqualTypeOf<{
       feedTimestamp: number | null;
       timestamp: number | null;
       delay: number | null;
@@ -240,11 +264,24 @@ describe('trip detail', () => {
       startTime: string | null;
       scheduleRelationship: string | null;
       stopTimeUpdateCount: number;
-    } | null>();
+    }>();
+  });
+
+  it('pins TripDetailResponse', () => {
+    expectTypeOf<TripDetailResponse>().toEqualTypeOf<{
+      tripId: string;
+      serviceDate: string;
+      classification: TripClassification[];
+      scheduled: TripScheduleDetail | null;
+      realtime: {
+        pings: Ping[];
+        tripUpdate: TripUpdateSummary | null;
+      };
+    }>();
   });
 });
 
-describe('shapes', () => {
+describe('shapes.md', () => {
   it('pins ShapeResponse', () => {
     expectTypeOf<ShapeResponse>().toEqualTypeOf<{
       shapeId: string;
