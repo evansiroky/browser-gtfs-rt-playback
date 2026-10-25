@@ -347,6 +347,61 @@ describe('60 seconds without interaction', () => {
   });
 });
 
+describe('timers that fire late (a slept machine or a throttled tab)', () => {
+  it('does not ping when the cadence tick fires after the idle minute has already passed', async () => {
+    const controller = await engaged();
+    // Run second by second, answering every request, so nothing is in flight at the end.
+    const runTo = async (seconds: number) => {
+      while (clock.now() < seconds * SEC) {
+        clock.advance(SEC);
+        const call = api.calls.find((c) => !answered.has(c));
+        if (call) {
+          answered.add(call);
+          await call.resolve(activeStatus());
+        }
+      }
+    };
+    const answered = new Set<Call>(api.calls);
+    await runTo(57);
+    controller.noteInteraction();
+    await runTo(105);
+    controller.noteInteraction();
+    const sent = api.calls.length;
+
+    // The machine sleeps until t = 300 s; overdue timers then fire in due order.
+    clock.jump(300 * SEC - clock.now());
+    expect(api.calls.length).toBe(sent);
+    expect(controller.getSnapshot().phase).toBe('paused-idle');
+
+    clock.advance(10 * IDLE_TIMEOUT_MS);
+    expect(api.calls.length).toBe(sent);
+  });
+
+  it('aborts a request that was still outstanding when the late tick finds the page idle', async () => {
+    await engaged();
+    clock.advance(PING_INTERVAL_MS);
+    const hanging = api.last;
+    clock.jump(5 * 60 * SEC);
+    expect(hanging.signal.aborted).toBe(true);
+    expect(api.calls).toHaveLength(2);
+  });
+
+  it('does not ping after a hide when the late timers fire', async () => {
+    const controller = await engaged();
+    clock.advance(5 * SEC);
+    controller.setVisible(false);
+    clock.jump(10 * 60 * SEC);
+    expect(api.kinds).toEqual(['start']);
+    expect(controller.getSnapshot().phase).toBe('paused-hidden');
+  });
+
+  it('still pings on a tick that is only a little late', async () => {
+    await engaged();
+    clock.jump(PING_INTERVAL_MS + 900);
+    expect(api.kinds).toEqual(['start', 'ping']);
+  });
+});
+
 describe('resuming', () => {
   it('while resuming, the failure of the ping still releases the data refetch', async () => {
     const controller = await engaged();
@@ -429,15 +484,38 @@ describe('maximum duration', () => {
     clock.advance(PING_INTERVAL_MS);
     await api.last.resolve(ended);
 
+    expect(controller.getSnapshot().restartFailed).toBe(false);
     controller.restart();
     await api.last.reject(new ApiError('network', 'down'));
-    expect(controller.getSnapshot()).toMatchObject({ phase: 'ended' });
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'ended', restartFailed: true });
     expect(controller.getSnapshot().error).toBeInstanceOf(ApiError);
 
     clock.advance(IDLE_TIMEOUT_MS);
     expect(api.kinds).toEqual(['start', 'ping', 'start']);
     controller.restart();
     expect(api.kinds).toEqual(['start', 'ping', 'start', 'start']);
+  });
+
+  it('a failed Restart is flagged until the next attempt, and a success clears it', async () => {
+    const controller = await engaged();
+    clock.advance(PING_INTERVAL_MS);
+    await api.last.resolve(ended);
+
+    controller.restart();
+    await api.last.reject(new ApiError('network', 'down'));
+    expect(controller.getSnapshot().restartFailed).toBe(true);
+
+    controller.restart();
+    expect(controller.getSnapshot().restartFailed).toBe(false);
+    await api.last.resolve(activeStatus());
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'engaged', restartFailed: false });
+  });
+
+  it('a failed cadence ping is not a failed Restart', async () => {
+    const controller = await engaged();
+    clock.advance(PING_INTERVAL_MS);
+    await api.last.reject(new ApiError('network', 'down'));
+    expect(controller.getSnapshot().restartFailed).toBe(false);
   });
 
   it('only max-duration ends the session; a dormant status for another reason does not', async () => {

@@ -45,6 +45,8 @@ export interface ActivitySnapshot {
    * announces it has been answered, so the server is awake before data is refetched.
    */
   resuming: boolean;
+  /** The last Restart / Retry failed and nothing has succeeded since. */
+  restartFailed: boolean;
 }
 
 type RequestKind = 'start' | 'ping';
@@ -52,6 +54,8 @@ type RequestKind = 'start' | 'ping';
 interface InFlight {
   kind: RequestKind;
   abort: AbortController;
+  /** Sent by the Restart / Retry action rather than by the cadence. */
+  userInitiated: boolean;
 }
 
 /**
@@ -84,6 +88,7 @@ export class ActivityController {
   private statusAt: number | null = null;
   private error: Error | null = null;
   private resuming = false;
+  private restartFailed = false;
   private inFlight: InFlight | null = null;
   private cadenceTimer: unknown = null;
   private idleTimer: unknown = null;
@@ -149,7 +154,7 @@ export class ActivityController {
   /** The **Restart** / **Retry** actions: always a start, whatever state the page is in. */
   restart(): void {
     if (!this.running) return;
-    this.send('start', false);
+    this.send('start', false, true);
     // A restart replaces whatever cadence was running.
     if (this.cadenceTimer !== null) {
       this.cancelCadence();
@@ -188,10 +193,11 @@ export class ActivityController {
     }
   }
 
-  private send(kind: RequestKind, resuming: boolean): void {
+  private send(kind: RequestKind, resuming: boolean, userInitiated = false): void {
     this.abortInFlight();
+    if (userInitiated) this.restartFailed = false;
     const abort = new AbortController();
-    const request: InFlight = { kind, abort };
+    const request: InFlight = { kind, abort, userInitiated };
     this.inFlight = request;
     this.everSent = true;
     this.resuming = resuming;
@@ -210,6 +216,7 @@ export class ActivityController {
     this.status = status;
     this.statusAt = this.clock.now();
     this.error = null;
+    this.restartFailed = false;
     if (request.kind === 'start') this.startSucceeded = true;
     // A successful restart re-arms the cadence without another request; a session that just
     // ended disarms it.
@@ -222,6 +229,7 @@ export class ActivityController {
     this.inFlight = null;
     this.resuming = false;
     this.error = error instanceof Error ? error : new Error(String(error));
+    if (request.userInitiated) this.restartFailed = true;
     this.commit();
   }
 
@@ -234,6 +242,14 @@ export class ActivityController {
     this.cadenceTimer = this.clock.setTimeout(() => {
       this.cadenceTimer = null;
       if (!this.shouldRun()) return;
+      // The idle timer may not have run yet (a throttled or slept page fires overdue timers
+      // late), so judge idleness from the clock rather than the cached flag.
+      if (this.clock.now() - this.lastInteractionAt >= IDLE_TIMEOUT_MS) {
+        this.abortInFlight();
+        this.resuming = false;
+        this.enterIdle();
+        return;
+      }
       this.armCadence();
       // Never stack on a request that has not answered yet.
       if (this.inFlight === null) {
@@ -260,12 +276,16 @@ export class ActivityController {
           this.armIdleTimer();
           return;
         }
-        this.idle = true;
-        this.sync(false);
-        this.commit();
+        this.enterIdle();
       },
       Math.max(0, remaining),
     );
+  }
+
+  private enterIdle(): void {
+    this.idle = true;
+    this.sync(false);
+    this.commit();
   }
 
   private clearIdleTimer(): void {
@@ -288,6 +308,7 @@ export class ActivityController {
       statusAt: this.statusAt,
       error: this.error,
       resuming: this.resuming,
+      restartFailed: this.restartFailed,
     };
   }
 
@@ -299,7 +320,8 @@ export class ActivityController {
       next.status === prev.status &&
       next.statusAt === prev.statusAt &&
       next.error === prev.error &&
-      next.resuming === prev.resuming
+      next.resuming === prev.resuming &&
+      next.restartFailed === prev.restartFailed
     ) {
       return;
     }

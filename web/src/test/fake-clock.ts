@@ -28,6 +28,22 @@ export class FakeClock implements Clock {
     return this.timers.length;
   }
 
+  /**
+   * Time jumps to `ms` from now in one step (a slept laptop, a throttled background tab), and
+   * only then do the overdue timers fire, in due order, each seeing the new time.
+   */
+  jump(ms: number): void {
+    this.time += ms;
+    for (;;) {
+      const due = this.timers
+        .filter((timer) => timer.at <= this.time)
+        .sort((a, b) => a.at - b.at || a.id - b.id)[0];
+      if (!due) break;
+      this.timers = this.timers.filter((timer) => timer !== due);
+      due.callback();
+    }
+  }
+
   advance(ms: number): void {
     const target = this.time + ms;
     for (;;) {
