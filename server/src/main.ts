@@ -1,5 +1,7 @@
 import { buildApp } from './app.js';
 import { ConfigError, loadConfig } from './config.js';
+import { ScheduleLoader } from './schedule/loader.js';
+import { shapesRoutes, type ScheduleServices } from './schedule/routes.js';
 import { closeThenExit, installCrashPolicy } from './shutdown.js';
 
 let config;
@@ -11,7 +13,15 @@ try {
   process.exit(1);
 }
 
-const { app } = await buildApp({ config, exit: () => process.exit(0) });
+const { app } = await buildApp<ScheduleServices>({
+  config,
+  exit: () => process.exit(0),
+  services: ({ config, clock, logger }) => ({
+    loader: new ScheduleLoader({ config, clock, logger: logger.child({ component: 'schedule' }) }),
+  }),
+  schedule: ({ services }) => services.loader,
+  routes: [shapesRoutes],
+});
 installCrashPolicy(process, app.log, (code) => process.exit(code));
 
 let closing = false;
