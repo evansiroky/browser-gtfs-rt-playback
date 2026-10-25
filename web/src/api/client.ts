@@ -8,7 +8,7 @@ export const REQUEST_TIMEOUT_MS = 8_000;
 /**
  * A failed API call. `network` means no HTTP answer arrived (offline, refused, timed out),
  * `http` a non-2xx response (with the error envelope's `code` when it parsed), `parse` a 2xx
- * response whose body was not JSON.
+ * response whose body was not JSON or not the expected shape.
  */
 export class ApiError extends Error {
   readonly kind: 'network' | 'http' | 'parse';
@@ -29,9 +29,12 @@ export class ApiError extends Error {
     this.code = options.code ?? null;
   }
 
-  /** The "Can't reach the server" cases: no answer, or a 5xx. */
+  /**
+   * The "Can't reach the server" cases: no answer, a 5xx, or a 2xx that is not what the API
+   * sends (a captive portal or proxy page, say).
+   */
   get isUnreachable(): boolean {
-    return this.kind === 'network' || (this.status !== null && this.status >= 500);
+    return this.kind !== 'http' || (this.status !== null && this.status >= 500);
   }
 }
 
@@ -48,19 +51,60 @@ function isErrorBody(value: unknown): value is ApiErrorBody {
   );
 }
 
-async function request<T>(method: 'GET' | 'POST', path: string, signal?: AbortSignal): Promise<T> {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+/**
+ * An abort signal that fires after {@link REQUEST_TIMEOUT_MS} or when `caller` aborts, built by
+ * hand because `AbortSignal.any`/`timeout` are missing from older browsers. `dispose` must run
+ * when the request is over.
+ */
+function requestSignal(caller?: AbortSignal): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const onCallerAbort = () => controller.abort(caller?.reason);
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('The request timed out', 'TimeoutError')),
+    REQUEST_TIMEOUT_MS,
+  );
+  if (caller?.aborted) onCallerAbort();
+  else caller?.addEventListener('abort', onCallerAbort, { once: true });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      caller?.removeEventListener('abort', onCallerAbort);
+    },
+  };
+}
+
+async function request<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  options: { signal?: AbortSignal; validate?: (body: unknown) => body is T } = {},
+): Promise<T> {
+  const { signal, dispose } = requestSignal(options.signal);
+  try {
+    return await send<T>(method, path, signal, options.signal, options.validate);
+  } finally {
+    dispose();
+  }
+}
+
+async function send<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  signal: AbortSignal,
+  caller: AbortSignal | undefined,
+  validate: ((body: unknown) => body is T) | undefined,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       method,
       headers: { accept: 'application/json' },
       cache: 'no-store',
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      signal,
     });
   } catch (cause) {
     // A caller's abort is not a failure; let it propagate untouched.
-    if (signal?.aborted) throw cause;
+    if (caller?.aborted) throw cause;
     throw new ApiError('network', 'Network request failed', { cause });
   }
 
@@ -68,7 +112,7 @@ async function request<T>(method: 'GET' | 'POST', path: string, signal?: AbortSi
   try {
     body = await response.json();
   } catch (cause) {
-    if (signal?.aborted) throw cause;
+    if (caller?.aborted) throw cause;
     // A body that cuts off or times out mid-read is a network failure; anything else is bad JSON.
     if (!(cause instanceof SyntaxError)) {
       throw new ApiError('network', 'Network request failed', { cause });
@@ -88,17 +132,35 @@ async function request<T>(method: 'GET' | 'POST', path: string, signal?: AbortSi
       status: response.status,
     });
   }
+  if (validate && !validate(body)) {
+    throw new ApiError('parse', 'Response was not the expected shape');
+  }
   return body as T;
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** The minimum a `SessionStatus` must have for the app to trust it. */
+function isSessionStatus(body: unknown): body is SessionStatus {
+  return (
+    isObject(body) &&
+    (body.state === 'dormant' || body.state === 'active') &&
+    isObject(body.schedule) &&
+    typeof body.schedule.state === 'string' &&
+    isObject(body.realtime)
+  );
+}
+
 export function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
-  return request<T>('GET', path, signal);
+  return request<T>('GET', path, { signal });
 }
 
 export function startSession(signal?: AbortSignal): Promise<SessionStatus> {
-  return request<SessionStatus>('POST', '/session/start', signal);
+  return request('POST', '/session/start', { signal, validate: isSessionStatus });
 }
 
 export function pingSession(signal?: AbortSignal): Promise<SessionStatus> {
-  return request<SessionStatus>('POST', '/session/ping', signal);
+  return request('POST', '/session/ping', { signal, validate: isSessionStatus });
 }
