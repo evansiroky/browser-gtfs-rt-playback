@@ -27,6 +27,9 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   stays `failed` until a start retries it. Realtime polling continues regardless.
 - While the schedule is not ready, realtime snapshots are still collected; only
   schedule-dependent figures are unavailable.
+- When the load completes, trips whose `frequencies.txt` rows have mixed `exact_times` values
+  are recorded as configuration errors ([trip-activity](trip-activity.md#schedule-entries)).
+  They do not fail the load.
 - A trip listed in `frequencies.txt` keeps its first and last stop time as a template
   ([trip-activity](trip-activity.md#schedule-entries)); `trips.txt` rows referencing a
   `shape_id` absent from `shapes.txt` are kept and simply have no geometry.

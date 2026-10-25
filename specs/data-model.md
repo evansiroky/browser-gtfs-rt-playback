@@ -27,9 +27,10 @@ For a trip with `frequencies.txt` rows, the start/end derived from `stop_times.t
 *template* (only their difference, the duration, is used), not instants on a service date.
 
 ## Schedule entry
-The unit the dashboard counts and lists: one per plain trip, one per `exact_times = 1`
-frequency instance, and one per trip for its headway-based (`exact_times = 0`) frequency
-rows. Defined in [behaviors/trip-activity.md](behaviors/trip-activity.md#schedule-entries).
+The unit the dashboard counts and lists: one per plain trip, and one per frequency instance
+(a nominal departure of a `frequencies.txt` row). A frequency trip with the mixed-`exact_times`
+configuration error has none. Defined in
+[behaviors/trip-activity.md](behaviors/trip-activity.md#schedule-entries).
 
 ## Shape
 From `shapes.txt`: for each `shape_id`, the ordered sequence of (latitude, longitude) points
@@ -38,8 +39,8 @@ by `shape_pt_sequence`. Other columns are not retained.
 ## Trip identity
 Everywhere the user sees, a trip is identified by its **trip ID** alone. Because the app
 holds at most one hour of realtime history, one trip ID refers to one service date at a
-time; the date, and for `exact_times = 1` frequency trips the instance start, are
-attributes the app derives or reads from the feed, not part of the identity.
+time; the date, and for frequency trips the instance start, are attributes the app derives
+or reads from the feed, not part of the identity.
 
 ## Realtime snapshot
 One successful fetch of one realtime feed (vehicle positions or trip updates): the decoded

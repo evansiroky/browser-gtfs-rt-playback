@@ -28,11 +28,11 @@ trips: [{
   scheduledStart: epoch seconds | null               // the entry's span; null when the trip is unknown
   scheduledEnd:   epoch seconds | null
   frequency: {                                       // null for plain trips
-    exactTimes:  boolean                             // true: an instance; false: the headway entry
+    exactTimes:  boolean                             // as sent (absent = false); informational only
     headwaySecs: integer
     windowStart: epoch seconds                       // frequencies.txt start_time on the service date
     windowEnd:   epoch seconds
-  } | null
+  } | null                                           // the entry is a nominal instance of this row
   realtime: {                                        // null for active-without-realtime
     vehicleIds:      string[]                        // distinct, from the latest snapshots
     hasVehiclePosition: boolean
@@ -40,13 +40,15 @@ trips: [{
     startTime:       string | null                   // the reference's start_time, as sent
     lastSeenAt:      epoch seconds | null            // newest vehicle timestamp, else feed timestamp
   } | null
-  reason: "unknown_trip" | "not_in_service" | "missing_start_time"
+  reason: "unknown_trip" | "configuration_error" | "not_in_service" | "missing_start_time"
         | "unmatched_start_time" | "outside_scheduled_time" | null   // list 3 only
 }]
 ```
-For frequency trips `frequency` describes the row that makes the entry active (for a list 3
-row, the row nearest in time, or null when none applies). For `exact_times = 1` trips, rows
-for different instances share a `tripId` and differ in `scheduledStart`.
+Rows for different instances of one frequency trip share a `tripId` and differ in
+`scheduledStart`. For a list 3 row of a frequency trip, `frequency` describes the row whose
+window contains the reference's start, else null. A trip with the mixed-`exact_times`
+configuration error produces no active entries; its list 3 rows have `scheduledStart` and
+`scheduledEnd` null and `frequency` null.
 
 ## Detail
 `GET /api/v1/trips/{tripId}` — `tripId` is percent-encoded. **No query parameters are
@@ -71,20 +73,21 @@ scheduled: {                                         // null when the trip ID is
   trip:        { [column: string]: string }          // every column of the trips.txt row, as text
   route:       { [column: string]: string } | null   // every column of the routes.txt row; null if missing
   operatesOnServiceDate: boolean
-  start:       epoch seconds | null                  // plain: span start; frequency: earliest window start; null if not operating
-  end:         epoch seconds | null                  // plain: span end; frequency: latest window end + template duration
+  start:       epoch seconds | null                  // plain: span start; frequency: first instance start; null if not operating or misconfigured
+  end:         epoch seconds | null                  // plain: span end; frequency: last instance end; null likewise
   activeNow:   boolean                               // any entry overlaps the current minute
   shapeId:     string | null                         // trips.txt shape_id; fetch via shapes.md
   frequencies: [{                                    // null for plain trips
     row:         { [column: string]: string }        // every column of the frequencies.txt row
-    exactTimes:  boolean
+    exactTimes:  boolean                             // as sent (absent = false); informational only
     headwaySecs: integer
     windowStart: epoch seconds
     windowEnd:   epoch seconds
     templateDurationSecs: integer
     activeNow:   boolean
-    activeInstanceStarts: epoch seconds[]            // exact_times = 1 only; instances overlapping now
+    activeInstanceStarts: epoch seconds[]            // nominal instances overlapping now; empty if misconfigured
   }] | null
+  configurationErrors: [{ code: "mixed_exact_times", message: string }]   // empty when none
 } | null
 realtime: {
   pings: [{                                         // ascending by sequence; retained window only

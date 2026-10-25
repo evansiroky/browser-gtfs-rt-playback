@@ -36,28 +36,31 @@ end ([data-model](../data-model.md#scheduled-trip)).
 **Frequency trip** (one or more rows in `frequencies.txt`) — its `stop_times.txt` rows are a
 *template*: only their relative offsets matter. The template's **duration** *D* is the last
 stop time minus the first. Each frequency row has a window [*S*, *E*) (`start_time`,
-`end_time`), a `headway_secs` *H*, and `exact_times`. Rows are interpreted per row, so a trip
-with both kinds of row has both kinds of entry:
+`end_time`) and a `headway_secs` *H*. Departures are **always assumed nominal**: the trip
+produces one entry per **instance**, with instance starts *S*, *S* + *H*, *S* + 2*H*, … while
+the start is before *E*, for every row, and an instance's span is [start, start + *D*]. The
+row's `exact_times` value is shown to the user as sent but does not change this
+interpretation: headway-based service is treated as if it ran exactly on the headway. An
+instance is identified by its trip ID and start.
 
-- **`exact_times = 1` (exact departures)** — one entry per **instance**: instance starts are
-  *S*, *S* + *H*, *S* + 2*H*, … while the start is before *E*. An instance's span is
-  [start, start + *D*]. An instance is identified by its trip ID and start.
-- **`exact_times = 0` or absent (headway-based)** — vehicles run roughly every *H* but not at
-  fixed times, so there are no individual instances to speak of. The trip produces **one
-  entry** (the *headway entry*), whatever number of vehicles are running. Its span, per row,
-  is [*S*, *E* + *D*] — from the first possible start to the last possible finish — and the
-  entry overlaps the current minute when any of its rows' spans does. Its displayed start and
-  end are the earliest *S* and latest *E* + *D* among its rows.
+**Configuration error: mixed `exact_times`** — a trip whose `frequencies.txt` rows do not all
+have the same `exact_times` (an absent value counts as `0`) is a **configuration error** in
+the schedule. Such a trip produces **no schedule entries**: it is not counted, not active, and
+not listed in lists 1 or 2. The error is reported to the user
+([api/dashboard.md](../api/dashboard.md), [api/trips.md](../api/trips.md#detail),
+[screens](../screens/dashboard.md)), and realtime references to the trip are listed in list 3
+with the reason `configuration_error`. The trip's schedule rows are still shown as they are in
+the feed ([Show the feed as it is](../principles.md#show-the-feed-as-it-is)).
 
 An entry has a **service date** (the candidate service date on which the trip operates and
 the entry's span overlaps the current minute; the later one if both; else today's if it
 operates today, else yesterday's).
 
 ## Counts
-**Scheduled today** — entries produced on today's service date by trips that operate on it.
-The dashboard's "trips scheduled today" is the count of those entries. (Entries that only
-run past midnight from yesterday's service date are not counted as scheduled today.) A
-headway entry counts once; exact instances count individually.
+**Scheduled today** — entries produced on today's service date by trips that operate on it
+(every plain trip once; every frequency instance individually). The dashboard's "trips
+scheduled today" is the count of those entries. (Entries that only run past midnight from
+yesterday's service date are not counted as scheduled today.)
 
 **Active this minute** — an entry whose span overlaps the current minute on a candidate
 service date on which its trip operates. The dashboard's "trips active this minute" is the
@@ -73,8 +76,10 @@ active entry, then one on which the trip operates, else today. Its **start** is 
 
 A reference **matches** an entry when it has the same trip ID, the same service date, and:
 
-- for a plain entry or a headway entry — nothing more;
-- for an `exact_times = 1` instance — its start equals the instance's start.
+- for a plain entry — nothing more;
+- for a frequency instance — its start equals the instance's start exactly. (A feed that
+  reports the actual start of a headway-based trip rather than the nominal one will not match;
+  it is shown with the reason `unmatched_start_time` instead of being matched loosely.)
 
 An entry **has realtime data** when at least one reference matches it.
 
@@ -84,21 +89,22 @@ Lists 1 and 2 hold active entries; list 3 holds references.
 1. **Active with realtime** — active entries that have realtime data.
 2. **Active without realtime** — active entries that do not.
 3. **Unscheduled with realtime** — realtime trip references that match **no active entry**.
-   References are grouped by trip ID, and additionally by start for trips that have
-   `exact_times = 1` rows, so each row stands for one trip (or instance) as the feed
-   describes it. Each carries a **reason**, the first that applies:
+   References are grouped by trip ID, and additionally by start for frequency trips, so each
+   row stands for one trip (or instance) as the feed describes it. Each carries a **reason**,
+   the first that applies:
    - `unknown_trip` — the trip ID does not exist in `trips.txt`;
+   - `configuration_error` — the trip has the mixed-`exact_times` configuration error;
    - `not_in_service` — the trip exists but does not operate on the reference's service date;
-   - `missing_start_time` — the trip has `exact_times = 1` rows and no active headway entry,
-     and the reference has no `start_time`, so no instance can be identified;
-   - `unmatched_start_time` — as above, but the reference's start equals no instance start of
-     the trip on that service date;
-   - `outside_scheduled_time` — the trip operates that day but none of its matching entries
-     (or the instance whose start the reference names) overlaps the current minute — it is
-     running before its start or after its end.
+   - `missing_start_time` — the trip is a frequency trip and the reference has no
+     `start_time`, so no instance can be identified;
+   - `unmatched_start_time` — the trip is a frequency trip and the reference's start equals no
+     instance start of the trip on that service date;
+   - `outside_scheduled_time` — the trip operates that day but the entry matching the
+     reference (the plain trip, or the instance whose start the reference names) does not
+     overlap the current minute — it is running before its start or after its end.
 
-A trip with `exact_times = 1` rows can therefore appear in lists 1 or 2 (for its active
-instances) and in list 3 (for references matching no active instance) at once.
+A frequency trip can therefore appear in lists 1 or 2 (for its active instances) and in
+list 3 (for references matching no active instance) at once.
 
 Trip references without a trip ID appear in no list; they are visible only through the
 "vehicles" statistic ([Show the feed as it is](../principles.md#show-the-feed-as-it-is):
@@ -118,13 +124,19 @@ A statistic that depends on an unconfigured feed, a feed with no successful snap
 or a schedule that is not ready is unavailable (null) rather than zero.
 
 ## Ordering
-Lists 1 and 2: by displayed start (earliest first), then trip ID. List 3: by reason in the
-order listed above, then trip ID, then start.
+Lists 1 and 2: by start (earliest first), then trip ID. List 3: by reason in the order listed
+above, then trip ID, then start.
 
 ## Principles
 **Inherited**
 - [Show the feed as it is](../principles.md#show-the-feed-as-it-is) — odd realtime trips
-  (unknown, missing a start time, out of window) are classified with a reason, never
-  discarded or force-matched.
+  (unknown, missing a start time, out of window) and a misconfigured schedule are labeled with
+  a reason, never discarded or force-matched.
 - [Agency-local time](../principles.md#agency-local-time) — "today" and "this minute" are
   agency-local, including across midnight and DST changes.
+
+**Local**
+- **Nominal departures over guessing.** Where the schedule does not pin down when a vehicle
+  leaves (headway-based frequencies), assume it leaves on the headway rather than inventing a
+  fuzzy matching rule. Simple and predictable beats clever; mismatches are reported, not
+  hidden.

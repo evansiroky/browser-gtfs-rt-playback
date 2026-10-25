@@ -30,9 +30,13 @@ several labels, and none if it is in no list). A link back to the dashboard.
 - A table of every column of the associated `routes.txt` row, headed by the route's short
   and long names. When the route row is missing, it says the route ID is not in `routes.txt`.
 - For a frequency trip, a table of its `frequencies.txt` rows (every column), each with its
-  window (agency-local), whether it is active now, and its template duration. For an
-  `exact_times = 1` row, the start times of the instances active now; for an `exact_times = 0`
-  row, a note that vehicles run approximately every headway rather than at fixed times.
+  window (agency-local), its template duration, whether it is active now, and the start times
+  of its nominal instances active now. Rows with `exact_times` absent or `0` carry a note that
+  departures are assumed to be exactly on the headway.
+- Each entry of `scheduled.configurationErrors` is shown as a prominent error stating the
+  problem ("This trip's frequencies.txt rows mix exact_times values, so its activity cannot be
+  determined and it is excluded from schedule counts") above the tables, which still show the
+  rows as they are in the feed.
 When `scheduled` is null the section says the trip ID is not in the schedule.
 
 **Trip update** — when the latest trip updates snapshot has an update for this trip: its

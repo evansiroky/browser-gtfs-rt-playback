@@ -23,11 +23,18 @@ lists: {                                            // null until the schedule i
   activeWithoutRealtime:   integer
   unscheduledWithRealtime: integer
 } | null
+configurationErrors: {                              // null until the schedule is ready
+  total: integer
+  items: [{ code: "mixed_exact_times", tripId: string, message: string }]   // first 100
+} | null
 ```
 Definitions of each figure are in [trip-activity](../behaviors/trip-activity.md#statistics).
 `lists.activeWithRealtime` equals `realtime.activeTripsWithRealtime`; counts in `lists`
 equal the lengths of the corresponding [trip lists](trips.md#list). `agency.timezone` is an
-IANA timezone name.
+IANA timezone name. `configurationErrors` lists schedule problems found when the schedule was
+loaded ([trip-activity](../behaviors/trip-activity.md#schedule-entries)); trips named there
+are excluded from the scheduled and active counts and from lists 1 and 2, and appear in list 3
+only when the feed references them.
 
 ## Principles
 **Inherited**

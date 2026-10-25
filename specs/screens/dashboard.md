@@ -32,6 +32,12 @@ current agency-local date and time.
 
 **Schedule statistics** — "Trips scheduled today" and "Trips active this minute".
 
+**Schedule configuration errors** — shown whenever `configurationErrors.total` is above zero,
+independent of the session banner: an error notice stating the number of trips affected
+("N trips have frequencies.txt rows with mixed exact_times and are excluded from the counts
+and lists"), expandable to the trip IDs (each a link to its trip detail), with a note when
+more than the returned items exist. Hidden when there are none.
+
 **Realtime statistics** — "Vehicles", "Vehicles with trip IDs", "Trip updates", and "Active
 trips with realtime data". Each shows the last known number. A statistic whose feed is not
 configured shows "Not configured"; one awaiting its first snapshot or the schedule shows a
@@ -53,15 +59,14 @@ latest sighting, and the reason in plain words:
 |---|---|
 | `unknown_trip` | "Trip ID not in schedule" |
 | `not_in_service` | "Not in service on this date" |
+| `configuration_error` | "Schedule configuration error (see trip)" |
 | `missing_start_time` | "Frequency trip, but the feed sent no start time" |
 | `unmatched_start_time` | "Start time matches no scheduled departure" |
 | `outside_scheduled_time` | "Outside its scheduled time" |
 
-Frequency-based trips are marked in the row. An `exact_times = 1` instance shows its own
+Frequency-based trips are marked in the row. Each active instance shows its own nominal
 start–end and a "departs every N min" note, so the same trip ID may appear on several rows
-(one per active instance). A headway-based trip (`exact_times = 0`) is one row, showing its
-operating window, "runs every N min", and the vehicles currently on it; its start–end is
-the window, not a departure. Order is as returned by the API. An empty list shows an
+(one per active instance). Order is as returned by the API. An empty list shows an
 explanatory empty state, not a blank area.
 
 Every row is a link to the [trip detail](trip-detail.md) of that trip ID. Rows that share a
