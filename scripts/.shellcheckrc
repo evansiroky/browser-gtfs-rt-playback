@@ -1,0 +1,2 @@
+# Follow `source lib.sh` even when a single script is checked on its own.
+external-sources=true
