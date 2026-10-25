@@ -1,17 +1,17 @@
 /**
  * The Content-Security-Policy for every response (architecture.md "Security posture"): only this
- * origin, plus the configured tile host for map data. MapLibre needs `blob:` workers, `data:`/
- * `blob:` images and inline styles.
+ * origin, plus the map tile host. MapLibre fetches the style, vector tiles, sprites and glyphs
+ * (`connect-src`), may load raster or sprite images (`img-src`), runs its workers from `blob:`
+ * URLs and applies inline styles.
  */
-export function contentSecurityPolicy(tileHost: string | null): string {
-  const tiles = tileHost ? ` ${tileHost}` : '';
+export function contentSecurityPolicy(tileHost: string): string {
   return [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data: blob:${tiles}`,
-    `font-src 'self'${tiles}`,
-    `connect-src 'self'${tiles}`,
+    `img-src 'self' data: blob: ${tileHost}`,
+    "font-src 'self'",
+    `connect-src 'self' ${tileHost}`,
     'worker-src blob:',
     'child-src blob:',
     "object-src 'none'",
@@ -21,7 +21,7 @@ export function contentSecurityPolicy(tileHost: string | null): string {
   ].join('; ');
 }
 
-export function securityHeaders(tileHost: string | null): Record<string, string> {
+export function securityHeaders(tileHost: string): Record<string, string> {
   return {
     'content-security-policy': contentSecurityPolicy(tileHost),
     'x-content-type-options': 'nosniff',

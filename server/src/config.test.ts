@@ -36,7 +36,7 @@ describe('loadConfig', () => {
       retentionMs: 60 * 60_000,
       historyMemoryLimitBytes: 512 * 1024 * 1024,
       rateLimitPerMinute: 120,
-      tileHost: null,
+      tileHost: 'https://tiles.openfreemap.org',
       warnings: [],
     });
     expect(config.vehiclePositionsUrl?.reveal().href).toBe(SECRET);
@@ -50,7 +50,7 @@ describe('loadConfig', () => {
       POLL_INTERVAL_MS: '5000',
       RT_TIMEOUT_MS: '4000',
       RT_MAX_BYTES: '1000',
-      SCHEDULE_TIMEOUT_MS: '9',
+      SCHEDULE_TIMEOUT_MS: '9000',
       SCHEDULE_MAX_BYTES: '10',
       SCHEDULE_MEMORY_LIMIT_BYTES: '11',
       IDLE_TIMEOUT_MS: '60000',
@@ -67,7 +67,7 @@ describe('loadConfig', () => {
       pollIntervalMs: 5000,
       realtimeTimeoutMs: 4000,
       realtimeMaxBytes: 1000,
-      scheduleTimeoutMs: 9,
+      scheduleTimeoutMs: 9000,
       scheduleMaxBytes: 10,
       scheduleMemoryLimitBytes: 11,
       idleTimeoutMs: 60000,
@@ -120,6 +120,23 @@ describe('loadConfig', () => {
     ],
     ['tile host with a path', { ...base, TILE_HOST: 'https://tiles.example.test/styles/x' }],
     ['tile host without scheme', { ...base, TILE_HOST: 'tiles.example.test' }],
+    ['tile host with credentials', { ...base, TILE_HOST: 'https://u:p@tiles.example.test' }],
+    ['tile host with a query', { ...base, TILE_HOST: 'https://tiles.example.test/?k=1' }],
+    ['tile host not http(s)', { ...base, TILE_HOST: 'ftp://tiles.example.test' }],
+    [
+      'feed URL with userinfo',
+      { ...base, VEHICLE_POSITIONS_URL: 'https://user:pw@rt.example.test/vp' },
+    ],
+    [
+      'feed URL with a username only',
+      { ...base, SCHEDULE_URL: 'https://user@s.example.test/g.zip' },
+    ],
+    ['poll interval above the timer ceiling', { ...base, POLL_INTERVAL_MS: '3000000000' }],
+    ['idle timeout above the timer ceiling', { ...base, IDLE_TIMEOUT_MS: '2147483648' }],
+    ['max activation above the timer ceiling', { ...base, MAX_ACTIVATION_MS: '9999999999' }],
+    ['poll interval below one second', { ...base, POLL_INTERVAL_MS: '999' }],
+    ['fetch timeout below one second', { ...base, RT_TIMEOUT_MS: '10' }],
+    ['retention below one second', { ...base, RETENTION_MS: '1' }],
     ['zero rate limit', { ...base, RATE_LIMIT_PER_MIN: '0' }],
   ])('refuses to start: %s', (_name, env) => {
     expect(problems(env).length).toBeGreaterThan(0);
@@ -156,5 +173,26 @@ describe('loadConfig', () => {
       expect(text).not.toMatch(/feeds\.example\.test|SUPERSECRET123|ZIPTOKEN999|api_key/);
     }
     expect(JSON.parse(JSON.stringify(config)).vehiclePositionsUrl).toBe('[redacted]');
+  });
+
+  it('accepts durations at both bounds', () => {
+    const config = loadConfig({
+      ...base,
+      POLL_INTERVAL_MS: '1000',
+      IDLE_TIMEOUT_MS: '2147483647',
+      MAX_ACTIVATION_MS: '2147483647',
+    });
+    expect(config.pollIntervalMs).toBe(1000);
+    expect(config.idleTimeoutMs).toBe(2_147_483_647);
+  });
+
+  it('refuses feed URLs with userinfo without printing them', () => {
+    const found = problems({
+      ...base,
+      TRIP_UPDATES_URL: 'https://alice:hunter2@rt.example.test/tu',
+    });
+    expect(found.join('\n')).toContain('TRIP_UPDATES_URL');
+    expect(found.join('\n')).toContain('query string');
+    expect(found.join('\n')).not.toMatch(/alice|hunter2|rt\.example/);
   });
 });
