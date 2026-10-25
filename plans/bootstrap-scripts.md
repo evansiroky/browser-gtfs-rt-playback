@@ -1,9 +1,10 @@
 ---
-status: planned
+status: done
 depends: []
 specs:
   - specs/infrastructure.md
 issues: []
+pr: 3
 ---
 
 # Plan: Bootstrap and teardown scripts
@@ -62,12 +63,12 @@ Environment notes: `shellcheck` is not installed; `pip install shellcheck-py` wo
 reachable). There is no real GCP project in this environment.
 
 ## Validation
-- [ ] `shellcheck scripts/*.sh` is clean.
-- [ ] Test harness passes: ordering, idempotent re-run, `--dry-run` does nothing, confirmation
+- [x] `shellcheck scripts/*.sh` is clean.
+- [x] Test harness passes: ordering, idempotent re-run, `--dry-run` does nothing, confirmation
       required, unlabeled bucket never deleted, no key creation anywhere.
-- [ ] `bootstrap.sh --help` and `teardown.sh --help` document every flag and env fallback.
-- [ ] Naming contract table in `scripts/README.md` matches the constants in `lib.sh`.
-- [ ] Both scripts reject a malformed `owner/repo` and a missing project with a clear message.
+- [x] `bootstrap.sh --help` and `teardown.sh --help` document every flag and env fallback.
+- [x] Naming contract table in `scripts/README.md` matches the constants in `lib.sh`.
+- [x] Both scripts reject a malformed `owner/repo` and a missing project with a clear message.
 - [ ] Live run of `bootstrap.sh` then `teardown.sh` against a throwaway real GCP project
       (cannot be verified in this environment; operator step).
 
@@ -79,7 +80,62 @@ reachable). There is no real GCP project in this environment.
   README should say how to add one.
 
 ## Notes
-(Populated at closeout.)
+- **Verification.** shellcheck 0.11.0 (`pip install shellcheck-py`) is clean on `scripts/*.sh`
+  and on the harness files. `scripts/test/run-tests.sh` passes 29 tests in about 12 s on
+  bash 5.2. The harness was mutation-checked: each of ten deliberate breakages (ignore the
+  bucket label, skip a confirmation, ignore `--dry-run`, change the mapping or apply target,
+  reorder steps, ...) makes at least one test fail. The live-run box stays open: there is no
+  real GCP project here.
+- **Deviations from the Approach table (flag for review):**
+  - `tf-apply` also gets `roles/iam.serviceAccountUser`. Cloud Run needs `actAs` on the
+    runtime service account to deploy a service that runs as it, and `serviceAccountAdmin`
+    does not include `actAs`. It adds no real escalation, since `serviceAccountAdmin` can
+    already change any service account's IAM policy.
+  - `tf-plan` also gets `roles/billing.viewer` on the billing account, in the same
+    "only if the caller can grant it" step as `costsManager`. Without it, `terraform plan`
+    on a pull request cannot refresh the `google_billing_budget` resource.
+  - The GitHub repository variable names were not in the plan, so they are fixed in the
+    contract here: `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `GCP_REGION`, `TF_STATE_BUCKET`.
+  - The state bucket also gets public access prevention.
+- **gcloud facts checked against gcloud 570 `--help` and its bundled source:**
+  - `storage buckets create` has no labels or versioning flags, so creation is a `create`
+    followed by `update --versioning --update-labels=...`.
+  - `storage rm --recursive gs://b` deletes every object version and then the bucket, and
+    does not fail on an empty bucket.
+  - Dict flags split each item at the first `=`, so the attribute mapping needs no `^DELIM^`
+    escaping (its values contain `==` but no commas).
+  - The GA `services list` format key is `config.name`.
+  - The bucket describe display fields are `labels` and `versioning_enabled`.
+  - `--condition=None` is accepted by project, service-account and bucket bindings. The
+    billing binding commands take no condition.
+- **Behavior choices.**
+  - All value flags are passed as `--flag=value`.
+  - `CLOUDSDK_CORE_DISABLE_PROMPTS=1` is set, so the script's own confirmation is the only
+    gate.
+  - Pools and providers soft-delete for 30 days. Bootstrap undeletes them; teardown treats
+    `DELETED` as gone.
+  - Bootstrap refuses to adopt a provider whose condition names another repo.
+  - Teardown removes every project and billing binding of the two identities, whatever the
+    role. It passes Terraform inputs as `TF_VAR_*` environment variables, which Terraform
+    ignores when undeclared, so it does not depend on `infra/`'s exact variable set.
+  - `--repo` is required by teardown only when Terraform runs.
+  - `--dry-run` needs no confirmation.
+- **Not confirmed from `--help` (needs the operator's first live run):**
+  - whether a principalSet attribute value may contain `:` and `/`
+    (`.../attribute.target/<owner>/<repo>/.github/workflows/infra.yml:pr`);
+  - that the `billing projects describe` value output is `True`/`billingAccounts/<id>`;
+  - that the bucket describe `json(labels)` output has the exact form
+    `"gtfs-rt-debugger-bootstrap": "true"`;
+  - that the flattened `get-iam-policy` value output for buckets and billing accounts is
+    `role<TAB>member` rows.
+- **bash 3.2:** the scripts avoid bash 4 features (no associative arrays, no bare
+  expansion of possibly-empty arrays under `set -u`). They were not run on a real 3.2,
+  because no 3.2 binary or source tarball was reachable here.
 
 ## Follow-ups
-(Populated at closeout.)
+- Wiring `shellcheck` and `scripts/test/run-tests.sh` into CI is
+  [`ci-cd`](ci-cd.md)'s job (its Approach already mentions it).
+- [`ci-cd`](ci-cd.md) and [`terraform-infra`](terraform-infra.md) must use the variable
+  names, `roles/billing.viewer` for `tf-plan`, and the member strings in
+  `scripts/README.md`. Tracked as: those plans' Validation boxes on byte-for-byte
+  contract matching.
