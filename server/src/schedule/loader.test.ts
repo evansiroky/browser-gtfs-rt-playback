@@ -1,4 +1,6 @@
 import type { ServerResponse } from 'node:http';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { scenario } from '@gtfs-rt-debugger/fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeClock, toEpochSeconds } from '../clock.js';
@@ -8,6 +10,9 @@ import { captureLogger } from '../test-support/logger.js';
 import { miniSchedule, zipOf } from '../test-support/zip.js';
 import { RETRY_DELAY_MS, ScheduleLoader, type LoadSchedule } from './loader.js';
 import type { ScheduleStore } from './store.js';
+
+v8.setFlagsFromString('--expose-gc');
+const collectGarbage = vm.runInNewContext('gc') as () => void;
 
 const SECRET_PATH = '/schedule.zip?api_key=SUPERSECRET123';
 const NOW = new Date('2026-10-14T19:07:42Z');
@@ -100,7 +105,7 @@ describe('failures', () => {
     expect(loader.store).toBeNull();
     expect(downloads()).toHaveLength(1);
 
-    await clock.advanceAsync(RETRY_DELAY_MS - 1);
+    await clock.advanceAsync(29_999); // feed-ingest.md: 30 s
     expect(downloads()).toHaveLength(1);
     host.route('/schedule.zip', (_req, res) => serveZip()(res));
     await clock.advanceAsync(1);
@@ -283,6 +288,17 @@ describe('discard', () => {
     loader.discard();
     expect(loader.store).toBeNull();
     expect(loader.status()).toEqual({ state: 'idle', loadedAt: null, error: null });
+  });
+
+  it('leaves nothing holding the loaded schedule, so its memory can be freed', async () => {
+    loader.start();
+    await untilState('ready');
+    const weak = new WeakRef(loader.store!);
+    loader.discard();
+    await vi.waitFor(() => {
+      collectGarbage();
+      expect(weak.deref() === undefined).toBe(true);
+    });
   });
 
   it('cancels the pending automatic retry', async () => {
