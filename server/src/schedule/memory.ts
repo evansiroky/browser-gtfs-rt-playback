@@ -33,7 +33,7 @@ export class MemoryBudget {
   }
 }
 
-const NOT_LATIN1 = /[^\u0000-\u00ff]/;
+const NOT_LATIN1 = /[\u0100-\uffff]/;
 
 /** Heap estimate for a string: header plus one byte per character, two if it has any beyond Latin-1. */
 export function stringBytes(value: string): number {
