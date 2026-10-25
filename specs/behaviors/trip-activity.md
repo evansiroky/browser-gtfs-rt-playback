@@ -71,7 +71,8 @@ A **realtime trip reference** is a trip reference with a trip ID
 ([data-model](../data-model.md#trip-reference)) in the **latest snapshot** of the vehicle
 positions feed or the trip updates feed. Its **service date** is its `start_date` when
 present; otherwise it is inferred: prefer a candidate service date on which the trip has an
-active entry, then one on which the trip operates, else today. Its **start** is its
+active entry, then one on which the trip operates, else today (when both candidate dates
+qualify at a step, the later one wins). Its **start** is its
 `start_time` interpreted on that service date, when present.
 
 A reference **matches** an entry when it has the same trip ID, the same service date, and:
