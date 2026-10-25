@@ -66,7 +66,8 @@ nothing that exists. It:
 6. Prints the values to set as GitHub repository variables (project ID, project number,
    region, state bucket) — it does not need or touch GitHub credentials — and the next
    steps: first local `terraform apply`, then adding the three secret values.
-7. Labels everything it creates with a fixed label so teardown can find it.
+7. Gives everything it creates a fixed, documented name, and labels the state bucket (the one
+   resource that supports labels) so teardown can prove the bucket is bootstrap's own.
 
 The deploy identity and its bindings are created by Terraform, not by the script
 ([deployment.md](deployment.md#identities)).
@@ -82,7 +83,8 @@ error. It:
 2. Unless told to skip it, runs `terraform destroy` against the project's state first.
 3. Removes what bootstrap created: the identity pool and provider, the plan and apply
    identities and their bindings, and finally the state bucket (including all versions).
-   Only resources carrying bootstrap's label are removed.
+   Resources are found by bootstrap's fixed names, and the state bucket is deleted only if it
+   carries bootstrap's label.
 4. With an explicit `--delete-project`, additionally shuts down the whole project (after a
    second confirmation). Without it, the project and billing link are left alone.
 5. Never touches resources it did not create.
