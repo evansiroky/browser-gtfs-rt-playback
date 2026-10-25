@@ -38,7 +38,8 @@ Error text never contains a feed URL, credential, or stack trace.
 Each client address (taken from the platform's forwarded-address header) may make at most
 the configured number of `/api/v1` requests per minute (default 120,
 [configuration](../behaviors/configuration.md#tunables-and-defaults)). A normal browser
-issues about a dozen per minute.
+issues about a dozen per minute. An IPv6 client is identified by its /64 prefix, since one
+client typically controls a whole /64.
 
 ## Principles
 **Inherited**
