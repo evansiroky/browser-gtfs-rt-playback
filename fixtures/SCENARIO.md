@@ -8,8 +8,8 @@ spec ([trip-activity](../specs/behaviors/trip-activity.md)) puts it where `expec
 How `expected` is produced: `src/expected.ts` evaluates the spec's rules over the scenario's own
 data, written for clarity rather than speed (it is not the engine, shares no code with it, and
 throws if a scenario would hit a case the spec leaves open). The tests in `src/scenario.test.ts`
-pin its output for two instants against literals derived by hand from the tables below, and a
-second, independent evaluator (written in Python during review) agreed with it field for field at
+pin its complete lists for two instants (12:07:42 and 00:20:00) against literals derived by hand from
+the tables below, and the clamped start of the fall-back day (01:15 PDT on 2026-11-01); a second, independent evaluator (written in Python during review) agreed with it field for field at
 thousands of instants, including both 2026 daylight-saving changes.
 
 ## Conventions
@@ -81,22 +81,23 @@ are always nominal (`S, S+H, ...` while `< E`), `exact_times` never changes that
 absent (`0`): a **configuration error**, so they have no entries; they are not counted, not active,
 not in lists 1 or 2.
 
-| Realtime on a frequency trip                                                                               | Result and why                                                                                                                                                                                                                                             |
-| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `freq-exact` VP, start_time `11:52:00`, no date                                                            | **List 1**, instance 11:52-12:12. Date inferred: the trip has an active instance starting at exactly that time today. Start equals the instance start exactly.                                                                                             |
-| `freq-exact` TU, start_time `12:02:00`, dated today, no vehicle                                            | **List 1**, instance 12:02-12:22, `hasTripUpdate` only.                                                                                                                                                                                                    |
-| `freq-exact` VP, start_time `11:53:30` (the 11:52 instance reporting an actual start 90 s late)            | **List 3, `unmatched_start_time`.** Equals no instance start; never matched loosely. `frequency` is the row whose window contains the start.                                                                                                               |
-| `freq-exact` VP, start_time `13:22:00` (the window end)                                                    | **List 3, `unmatched_start_time`**, `frequency` **null**: no instance starts at the exclusive end, and the window `[S, E)` does not contain it.                                                                                                            |
-| `freq-exact` VP, start_time `12:12:00`                                                                     | **List 3, `outside_scheduled_time`**, span 12:12-12:32. An instance exists, but starts after the minute. The same trip is in list 1 (two instances) and list 3 (three groups): a frequency trip may be in both.                                            |
-| `freq-nominal` VP, start_time `11:47:00` (A), dated today                                                  | **List 1**, instance 11:47-12:17, `frequency` = row A (900 s, `exactTimes` false).                                                                                                                                                                         |
-| `freq-nominal` VP, start_time `12:07:00` (B), dated today                                                  | **List 1**, instance 12:07-12:37, `frequency` = row B (600 s). An exact match on a row whose `exact_times` is absent.                                                                                                                                      |
-| `freq-nominal` instance 11:57 (B)                                                                          | **List 2**: active, no reference matches it exactly.                                                                                                                                                                                                       |
-| `freq-nominal` VP, start_time `11:48:30` (A's 11:47 + 90 s) and `11:58:30` (B's 11:57 + 90 s), dated today | **List 3, `unmatched_start_time`**, two rows, `frequency` = row A (900 s) and row B (600 s). Rows with `exact_times` `0` and absent are matched as exactly as `1`; a reference inside an active instance's span is not matched loosely.                    |
-| `freq-nominal` VP and TU, **no** start_time                                                                | **List 3, `missing_start_time`**, one row with both flags set (grouped by trip, and start, which is absent).                                                                                                                                               |
-| `freq-overnight` VP, start_time `24:10:00`, no date                                                        | At 12:07: **List 3, `outside_scheduled_time`**, service date today, span 24:10-24:30 (clock 00:10-00:30 on the 15th): step 1 finds no active instance starting then, so the later operating date wins. At 00:20: see below.                                |
-| `freq-mixed` VP, start_time `12:07:00`, no date                                                            | **List 3, `configuration_error`**, `frequency` and span null.                                                                                                                                                                                              |
-| `freq-mixed-removed-today` VP, dated today                                                                 | **List 3, `configuration_error`**, not `not_in_service`: the trip's service is removed today, but the configuration error is checked first.                                                                                                                |
-| `freq-nis` VP, no start_time, and VP start_time `03:33:33`, no date                                        | **List 3, `not_in_service`**, two rows (one per start). The trip is a frequency trip with no start_time on one reference and a start matching no instance on the other, but `not_in_service` comes before `missing_start_time` and `unmatched_start_time`. |
+| Realtime on a frequency trip                                                                               | Result and why                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `freq-exact` VP, start_time `11:52:00`, no date                                                            | **List 1**, instance 11:52-12:12. Date inferred: the trip has an active instance starting at exactly that time today. Start equals the instance start exactly.                                                                                                                                          |
+| `freq-exact` TU, start_time `12:02:00`, dated today, no vehicle                                            | **List 1**, instance 12:02-12:22, `hasTripUpdate` only.                                                                                                                                                                                                                                                 |
+| `freq-exact` VP, start_time `11:53:30` (the 11:52 instance reporting an actual start 90 s late)            | **List 3, `unmatched_start_time`.** Equals no instance start; never matched loosely. `frequency` is the row whose window contains the start.                                                                                                                                                            |
+| `freq-exact` VP, start_time `13:22:00` (the window end)                                                    | **List 3, `unmatched_start_time`**, `frequency` **null**: no instance starts at the exclusive end, and the window `[S, E)` does not contain it.                                                                                                                                                         |
+| `freq-exact` VP, start_time `12:12:00`                                                                     | **List 3, `outside_scheduled_time`**, span 12:12-12:32. An instance exists, but starts after the minute. The same trip is in list 1 (two instances) and list 3 (three groups): a frequency trip may be in both.                                                                                         |
+| `freq-nominal` VP, start_time `11:47:00` (A), dated today                                                  | **List 1**, instance 11:47-12:17, `frequency` = row A (900 s, `exactTimes` false).                                                                                                                                                                                                                      |
+| `freq-nominal` VP, start_time `12:07:00` (B), dated today                                                  | **List 1**, instance 12:07-12:37, `frequency` = row B (600 s). An exact match on a row whose `exact_times` is absent.                                                                                                                                                                                   |
+| `freq-nominal` instance 11:57 (B)                                                                          | **List 2**: active, no reference matches it exactly.                                                                                                                                                                                                                                                    |
+| `freq-nominal` VP, start_time `11:48:30` (A's 11:47 + 90 s) and `11:58:30` (B's 11:57 + 90 s), dated today | **List 3, `unmatched_start_time`**, two rows, `frequency` = row A (900 s) and row B (600 s). Rows with `exact_times` `0` and absent are matched as exactly as `1`; a reference inside an active instance's span is not matched loosely.                                                                 |
+| `freq-nominal` VP and TU, **no** start_time                                                                | **List 3, `missing_start_time`**, one row with both flags set (grouped by trip, and start, which is absent).                                                                                                                                                                                            |
+| `freq-overnight` VP, start_time `24:10:00`, no date                                                        | At 12:07: **List 3, `outside_scheduled_time`**, service date today, span 24:10-24:30 (clock 00:10-00:30 on the 15th): step 1 finds no active instance starting then, so the later operating date wins. At 00:20: see below.                                                                             |
+| `freq-overnight` VP, start_time `23:10:00`, no date                                                        | **List 3, `outside_scheduled_time`**, service date today, span 23:10-23:30, at any time of day it is looked at: no instance starting at 23:10 is active on either date (just after midnight yesterday has active instances, but none starting then), so step 1 fails and the later operating date wins. |
+| `freq-mixed` VP, start_time `12:07:00`, no date                                                            | **List 3, `configuration_error`**, `frequency` and span null.                                                                                                                                                                                                                                           |
+| `freq-mixed-removed-today` VP, dated today                                                                 | **List 3, `configuration_error`**, not `not_in_service`: the trip's service is removed today, but the configuration error is checked first.                                                                                                                                                             |
+| `freq-nis` VP, no start_time, and VP start_time `03:33:33`, no date                                        | **List 3, `not_in_service`**, two rows (one per start). The trip is a frequency trip with no start_time on one reference and a start matching no instance on the other, but `not_in_service` comes before `missing_start_time` and `unmatched_start_time`.                                              |
 
 ## Realtime without a schedule explanation
 
@@ -118,13 +119,13 @@ Counts
   `freq-overnight` 12 = **46**. Not counted: `plain-nis-*` and `freq-nis` (do not operate),
   `overnight-from-yesterday` (operates only yesterday), the two mixed trips (no entries).
 - **tripsActiveNow = 15**: list 1 has 8, list 2 has 7.
-- **vehicles = 29**, **vehiclesWithTripId = 27** (all but the two without a trip ID), **tripUpdates = 6**
+- **vehicles = 30**, **vehiclesWithTripId = 28** (all but the two without a trip ID), **tripUpdates = 6**
   (`plain-active-vp-tu`, `plain-active-tu`, `plain-past`, `freq-exact` 12:02, `freq-nominal`,
   `ghost-tu-trip`), **activeTripsWithRealtime = 8**.
 - Configuration errors: `freq-mixed`, `freq-mixed-removed-today`.
 
 Lists, in the spec's order (by start then trip ID; by reason, then trip ID, then start); list 3 has
-21 rows.
+22 rows.
 
 1. `plain-active-vp-tu` 11:37; `freq-nominal` 11:47; `plain-active-vp` 11:47; `freq-exact` 11:52;
    `plain-active-added-service` 11:52; `plain-active-tu` 11:57; `freq-exact` 12:02; `freq-nominal` 12:07.
@@ -136,7 +137,7 @@ Lists, in the spec's order (by start then trip ID; by reason, then trip ID, then
    `plain-nis-off-weekday`, `plain-nis-removed-today` / `missing_start_time`: `freq-nominal` /
    `unmatched_start_time`: `freq-exact` (11:53:30), `freq-exact` (13:22:00), `freq-nominal`
    (11:48:30), `freq-nominal` (11:58:30) / `outside_scheduled_time`: `freq-exact` (12:12:00),
-   `freq-overnight`, `overnight-daily`, `overnight-from-yesterday`, `plain-future`, `plain-past`,
+   `freq-overnight` (23:10:00), `freq-overnight` (24:10:00), `overnight-daily`, `overnight-from-yesterday`, `plain-future`, `plain-past`,
    `plain-ref-tomorrow`, `plain-ref-yesterday`.
 
 ## After midnight
@@ -155,6 +156,9 @@ which the trip has an active entry"), none of them carrying a `start_date`:
   an active instance starting at **exactly** that time): yesterday's instance 24:10 (clock 00:10 today,
   ending 00:30) is active, so the reference is in **list 1** on `20261013`, not
   `outside_scheduled_time`. Yesterday's other active instances, 24:00 and 24:20, are in list 2.
+  The second reference, start_time `23:10:00`, names an instance neither date has active, so it takes
+  the later operating date (today) and stays in list 3; a rule that looked at any active instance of
+  the trip would send it to yesterday.
 
 Everything else shifts to fit the 20 minutes of today that exist:
 
@@ -164,8 +168,9 @@ Everything else shifts to fit the 20 minutes of today that exist:
   late-start reference is 00:06:30; the `outside` instance is 00:25; the window end is 01:35).
   `freq-nominal` row A covers 00:00-00:10 (one instance, 00:00); row B 00:10-01:00 (00:10 and 00:20
   are active); `freq-mixed` anchors at 00:30.
-- tripsToday = 41, tripsActiveNow = 20 (list 1: 11, list 2: 9), vehicles 28, vehiclesWithTripId 26,
-  tripUpdates 5; list 3 has 17 rows (no `overnight-*`, no `freq-overnight`, no `plain-past`).
+- tripsToday = 41, tripsActiveNow = 20 (list 1: 11, list 2: 9), vehicles 29, vehiclesWithTripId 27,
+  tripUpdates 5; list 3 has 18 rows (no `overnight-*`, no `plain-past`, no `freq-overnight` 24:10:00;
+  its 23:10:00 reference stays).
 
 The test file pins all three lists. Between 01:30 and 02:00 (the overnight trips over, today's trips
 still clamped) is covered by the invariant sweep.
