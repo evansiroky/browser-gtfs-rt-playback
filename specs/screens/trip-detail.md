@@ -1,23 +1,27 @@
 # Screen: Trip detail
 
 ## Route
-`/trips/:tripId` with optional query `serviceDate=YYYYMMDD`. `tripId` is percent-encoded in
-the path.
+`/trips/:tripId`. `tripId` is percent-encoded in the path. The route takes no query
+parameters: the page always shows the trip as it is now and over the retained window (at
+most the last hour); there is no way to select a date.
 
 ## Data Requirements
 - Session pings exactly as on the [dashboard](dashboard.md#data-requirements) (this screen
   keeps the session alive only while engaged,
   [client-activity](../behaviors/client-activity.md)). If the page is loaded directly, it
   calls start first.
-- `GET /trips/{tripId}?serviceDate=…` every 10 s while engaged
-  ([api/trips.md](../api/trips.md#detail)).
+- `GET /trips/{tripId}` every 10 s while engaged ([api/trips.md](../api/trips.md#detail)).
+- `GET /shapes/{shapeId}` once per page view for the trip's `shapeId` (and again only if
+  the session's `activatedAt` changes or the trip's `shapeId` changes)
+  ([api/shapes.md](../api/shapes.md)).
 
 ## Display Rules
 Times are agency-local ([Agency-local time](../principles.md#agency-local-time)); the
 timezone comes from the dashboard endpoint.
 
-**Header** — trip ID, service date, and which list the trip is currently in (as a label),
-with the reason when it is in the unscheduled list. A link back to the dashboard.
+**Header** — trip ID, the derived service date, and a label for each entry in
+`classification` (which list, and the reason for the unscheduled list; a trip can carry
+several labels, and none if it is in no list). A link back to the dashboard.
 
 **Scheduled trip** — present when `scheduled` is not null:
 - A table of every column of the trip's `trips.txt` row (column name and value), plus
@@ -25,27 +29,39 @@ with the reason when it is in the unscheduled list. A link back to the dashboard
   now.
 - A table of every column of the associated `routes.txt` row, headed by the route's short
   and long names. When the route row is missing, it says the route ID is not in `routes.txt`.
+- For a frequency trip, a table of its `frequencies.txt` rows (every column), each with its
+  window (agency-local), whether it is active now, and its template duration. For an
+  `exact_times = 1` row, the start times of the instances active now; for an `exact_times = 0`
+  row, a note that vehicles run approximately every headway rather than at fixed times.
 When `scheduled` is null the section says the trip ID is not in the schedule.
 
 **Trip update** — when the latest trip updates snapshot has an update for this trip: its
 timestamp, delay, vehicle ID, schedule relationship, and the number of stop time updates.
 Otherwise it says no trip update is currently present.
 
-**Map** — shown when at least one ping has coordinates. One round marker per ping with
-coordinates, labeled with the ping's `sequence` number in small type. The map opens fitted
-to all markers and does not refit on later refreshes once the user has moved or zoomed it.
-Newly received pings appear as markers on refresh. Clicking a marker selects that ping
-(see Actions). With no pings, no map is shown; the page says no vehicle positions have been
-received for this trip in the retained history, and states when history begins
-(`historyStartsAt`) if it is shorter than an hour.
+**Map** — shown when the trip has a shape or at least one ping with coordinates.
+- The trip's **shape**, when it has one and the schedule contains it, is drawn as a line
+  under the markers. A trip with no `shape_id`, or whose shape is not in `shapes.txt`, has
+  no line, and the page says which of the two applies.
+- One round marker per ping with coordinates, labeled with the ping's `sequence` number in
+  small type. Pings of different vehicles remain individually identifiable by their popup
+  and list row (vehicle ID, and start time for frequency instances).
+- The map opens fitted to the shape and all markers, and does not refit on later refreshes
+  once the user has moved or zoomed it. Newly received pings appear as markers on refresh.
+  Clicking a marker selects that ping (see Actions).
+- With no pings, the map shows the shape alone (if any) and the page says no vehicle
+  positions have been received for this trip in the retained history, and states when
+  history begins (`historyStartsAt`) if it is shorter than an hour. With neither shape nor
+  pings, no map is shown.
 
 **Pings list** — a collapsible section, collapsed by default, headed "Vehicle positions
 (N)". Expanded, it lists every ping in sequence order (newest last), each row showing: the
 sequence number; local time of the vehicle timestamp (with seconds); vehicle ID (and label
 when present); and, as available, latitude/longitude, bearing, speed, current status, current
 stop sequence and stop ID, occupancy, congestion level, license plate, and any other
-passed-through field. Fields that are absent are omitted rather than shown empty. Pings
-without coordinates appear in the list and have no marker.
+passed-through field, including the trip descriptor's start date and start time. Fields that
+are absent are omitted rather than shown empty. Pings without coordinates appear in the list
+and have no marker.
 
 While paused ([client-activity](../behaviors/client-activity.md#paused)) the page keeps its
 last data, shows the same paused notice as the dashboard, and resumes on any interaction.

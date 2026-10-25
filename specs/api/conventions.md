@@ -8,7 +8,8 @@ it is same-origin and sends no CORS headers.
 - Instants are integers: Unix epoch **seconds** (UTC). The server never formats times; the
   client renders them in the agency timezone returned by
   [`GET /dashboard`](dashboard.md).
-- Service dates are strings `YYYYMMDD`.
+- Service dates are strings `YYYYMMDD`, returned for information only; no endpoint accepts a
+  date.
 - Every response carries `Cache-Control: no-store`.
 - Unknown fields in a response are to be ignored by clients; fields documented as nullable
   are always present.
@@ -22,8 +23,9 @@ Non-2xx responses use one envelope:
 
 | Status | Code | Meaning |
 |---|---|---|
-| 400 | `bad_request` | Malformed or invalid parameter |
+| 400 | `bad_request` | Malformed or invalid parameter, or any query parameter an endpoint does not define |
 | 404 | `trip_not_found` | See [trips.md](trips.md) |
+| 404 | `shape_not_found` | See [shapes.md](shapes.md) |
 | 409 | `session_not_active` | The server is dormant; start or ping first |
 | 409 | `schedule_not_ready` | The endpoint needs the schedule and it is loading or failed |
 | 429 | `rate_limited` | Client exceeded the per-address limit; `Retry-After` is set |

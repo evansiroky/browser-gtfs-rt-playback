@@ -21,8 +21,8 @@ an external store, and forgets everything when it goes dormant or shuts down.
 
 ## Schedule
 Held for the life of the activation (not subject to the one-hour window, because it is
-reference data rather than history) and bounded by the download size limit and the reduction
-rules in [feed-ingest](feed-ingest.md).
+reference data rather than history) and bounded by the download size limit, the schedule
+memory limit, and the reduction rules in [feed-ingest](feed-ingest.md).
 
 ## Forgetting
 On shutdown or dormancy ([session-lifecycle](session-lifecycle.md#shutting-down)) the server discards the

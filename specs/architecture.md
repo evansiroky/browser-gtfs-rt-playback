@@ -72,5 +72,5 @@ Exact internal layout of `server/` and `web/` is an implementation decision.
 ## Out of scope (v1)
 
 Persisting any data; user-configurable feeds; multiple agencies or multiple simultaneous
-configurations; alerts feeds; `frequencies.txt` (frequency-based trips); shapes and
-stop-level map layers; authentication; historical playback beyond the retained hour.
+configurations; alerts feeds; stop-level map layers (stops, stop times); authentication;
+any view of data older than the retained hour or of any date other than now.

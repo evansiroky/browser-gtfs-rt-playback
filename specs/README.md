@@ -12,7 +12,7 @@ specs/
 ├── README.md          # this file
 ├── principles.md      # project-wide principles: decisive rules that resolve unspecified decisions
 ├── architecture.md    # tech stack, project structure, foundational decisions
-├── data-model.md      # shared concepts: service date, trip key, snapshot, ping
+├── data-model.md      # shared concepts: service date, schedule entry, shape, snapshot, ping
 ├── infrastructure.md  # GCP resources, Terraform, bootstrap/teardown scripts, cost guards
 ├── deployment.md      # CI/CD: how code and infra reach the single environment
 ├── api/               # one file per endpoint group; conventions.md for shared rules

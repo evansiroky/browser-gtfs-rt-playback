@@ -28,6 +28,7 @@ configured URL is not `https` or `http`.
 | Realtime response size limit | 25 MiB | feed-ingest |
 | Schedule fetch timeout | 120 s | feed-ingest |
 | Schedule download size limit | 100 MiB | feed-ingest |
+| Schedule memory limit | 768 MiB | feed-ingest |
 | Idle timeout | 15 min | [session-lifecycle](session-lifecycle.md) |
 | Maximum activation duration | 2 h | session-lifecycle |
 | Exit on idle | on when deployed, off for local development | session-lifecycle |

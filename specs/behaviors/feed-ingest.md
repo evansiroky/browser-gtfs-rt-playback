@@ -11,18 +11,25 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   what the limit permits.
 - Only the data the rules need is kept ([Retain only what a screen shows](../principles.md#retain-only-what-a-screen-shows)):
   `agency.txt`; `routes.txt` (all columns); `trips.txt` (all columns); `calendar.txt` and
-  `calendar_dates.txt`; and from `stop_times.txt` only each trip's start and end
+  `calendar_dates.txt`; `frequencies.txt` (all columns); `shapes.txt` reduced to each shape's
+  ordered latitude/longitude points ([data-model](../data-model.md#shape)); and from
+  `stop_times.txt` only each trip's first and last stop time
   ([data-model](../data-model.md#scheduled-trip)). All other files and columns are
   discarded while streaming.
+- Geometry is stored compactly (for example as typed arrays), not as one object per point.
+- Decoded schedule data is bounded by the schedule memory limit; exceeding it aborts the
+  load with a `too_large` error.
 - Missing required files (`agency.txt`, `routes.txt`, `trips.txt`, `stop_times.txt`, and at
   least one of `calendar.txt` / `calendar_dates.txt`) fail the load with a descriptive,
-  feed-URL-free error.
+  feed-URL-free error. `frequencies.txt` and `shapes.txt` are optional; without them there
+  are no frequency trips and no shapes.
 - On failure, one automatic retry follows after 30 s. If that also fails, the schedule
   stays `failed` until a start retries it. Realtime polling continues regardless.
 - While the schedule is not ready, realtime snapshots are still collected; only
   schedule-dependent figures are unavailable.
-- `frequencies.txt` is ignored; trips defined by it are treated as single trips running
-  per their `stop_times.txt` rows as written.
+- A trip listed in `frequencies.txt` keeps its first and last stop time as a template
+  ([trip-activity](trip-activity.md#schedule-entries)); `trips.txt` rows referencing a
+  `shape_id` absent from `shapes.txt` are kept and simply have no geometry.
 
 ## Realtime
 - Each configured feed is fetched every poll interval (default 10 s), on its own timer,
@@ -51,4 +58,4 @@ Errors are reported as a code and a generic message (for example `http_status_40
 - [Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience) — one
   schedule download per activation, hard size and time limits, no queued fetches.
 - [Retain only what a screen shows](../principles.md#retain-only-what-a-screen-shows) —
-  stop times are reduced to start/end per trip while streaming.
+  stop times are reduced to first/last per trip and shapes to bare points while streaming.

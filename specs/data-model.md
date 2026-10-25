@@ -12,17 +12,34 @@ for every rule and display ([Agency-local time](principles.md#agency-local-time)
 A calendar date in the agency timezone, written `YYYYMMDD`, on which a trip's service is
 defined to run. GTFS times are offsets from "noon minus 12 hours" on the service date and
 may exceed 24:00:00, so a trip on yesterday's service date can still be running after
-midnight today.
+midnight today. A service date is always **derived** by the app
+([behaviors/trip-activity.md](behaviors/trip-activity.md)); no API accepts one.
 
 ## Scheduled trip
 A row of `trips.txt` plus the service dates on which its `service_id` operates (from
 `calendar.txt` and `calendar_dates.txt`, exceptions applied), plus two derived instants per
 service date: **start** (first stop time's departure, or arrival if no departure) and
 **end** (last stop time's arrival, or departure if no arrival). The full `trips.txt` row and
-its `routes.txt` row are retained as-is (all columns).
+its `routes.txt` row are retained as-is (all columns), as are the trip's `frequencies.txt`
+rows. A trip's `shape_id` links to its shape.
 
-## Trip key
-A trip is identified by **(trip_id, service date)**.
+For a trip with `frequencies.txt` rows, the start/end derived from `stop_times.txt` are a
+*template* (only their difference, the duration, is used), not instants on a service date.
+
+## Schedule entry
+The unit the dashboard counts and lists: one per plain trip, one per `exact_times = 1`
+frequency instance, and one per trip for its headway-based (`exact_times = 0`) frequency
+rows. Defined in [behaviors/trip-activity.md](behaviors/trip-activity.md#schedule-entries).
+
+## Shape
+From `shapes.txt`: for each `shape_id`, the ordered sequence of (latitude, longitude) points
+by `shape_pt_sequence`. Other columns are not retained.
+
+## Trip identity
+Everywhere the user sees, a trip is identified by its **trip ID** alone. Because the app
+holds at most one hour of realtime history, one trip ID refers to one service date at a
+time; the date, and for `exact_times = 1` frequency trips the instance start, are
+attributes the app derives or reads from the feed, not part of the identity.
 
 ## Realtime snapshot
 One successful fetch of one realtime feed (vehicle positions or trip updates): the decoded
@@ -33,21 +50,23 @@ successful one.
 ## Trip reference
 The `TripDescriptor` carried by a vehicle position or trip update. A reference **has a trip
 ID** when `trip_id` is present and non-empty. References without a trip ID are counted in
-vehicle statistics but cannot be keyed, listed, or linked.
+vehicle statistics but cannot be listed or linked.
 
 ## Ping
 One observation of a vehicle on a trip, taken from a `VehiclePosition` entity. A ping is
-identified by (trip key, vehicle ID, vehicle `timestamp`); the same triple seen in later
+identified by (trip ID, vehicle ID, vehicle `timestamp`); the same triple seen in later
 snapshots is the same ping and is recorded once. When a vehicle position has no `timestamp`,
 the snapshot's feed header timestamp stands in for it. When a vehicle position has no vehicle
-ID, the entity ID stands in.
+ID, the entity ID stands in. A ping keeps the `start_date` and `start_time` of its trip
+reference, so pings of different frequency instances or vehicles on the same trip ID stay
+distinguishable.
 
-Each trip key has a **ping sequence**: integers assigned 1, 2, 3… in order of first receipt
+Each trip ID has a **ping sequence**: integers assigned 1, 2, 3… in order of first receipt
 since the activation began. Numbers are never reassigned when old pings expire
 ([behaviors/data-retention.md](behaviors/data-retention.md)), so a ping keeps the same number
 for as long as it is shown.
 
 ## Trip classification
-Every trip key that is either (a) scheduled and active in the current minute or (b) carried
-by a trip reference in a latest snapshot falls into exactly one list; see
-[behaviors/trip-activity.md](behaviors/trip-activity.md).
+Every schedule entry that is active in the current minute, and every realtime trip
+reference in a latest snapshot, is placed in the lists defined in
+[behaviors/trip-activity.md](behaviors/trip-activity.md#the-three-lists).

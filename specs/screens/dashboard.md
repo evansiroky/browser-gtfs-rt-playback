@@ -47,11 +47,25 @@ the statistics, as an age ("12 s ago").
 Columns — lists 1 and 2: trip ID, route (short name, else long name, else route ID),
 headsign, scheduled start–end (agency-local, 24-hour). List 1 adds vehicle ID(s) and the
 age of the latest sighting. List 3: trip ID, route (as available), vehicle ID(s), age of the
-latest sighting, and the reason in plain words ("Trip ID not in schedule", "Not in service
-on this date", "Outside its scheduled time"). Order is as returned by the API. An empty list
-shows an explanatory empty state, not a blank area.
+latest sighting, and the reason in plain words:
 
-Every row is a link to the [trip detail](trip-detail.md) of that trip.
+| Reason | Text |
+|---|---|
+| `unknown_trip` | "Trip ID not in schedule" |
+| `not_in_service` | "Not in service on this date" |
+| `missing_start_time` | "Frequency trip, but the feed sent no start time" |
+| `unmatched_start_time` | "Start time matches no scheduled departure" |
+| `outside_scheduled_time` | "Outside its scheduled time" |
+
+Frequency-based trips are marked in the row. An `exact_times = 1` instance shows its own
+start–end and a "departs every N min" note, so the same trip ID may appear on several rows
+(one per active instance). A headway-based trip (`exact_times = 0`) is one row, showing its
+operating window, "runs every N min", and the vehicles currently on it; its start–end is
+the window, not a departure. Order is as returned by the API. An empty list shows an
+explanatory empty state, not a blank area.
+
+Every row is a link to the [trip detail](trip-detail.md) of that trip ID. Rows that share a
+trip ID share a detail page.
 
 Lists are filterable by a text search over trip ID and route, per list.
 
@@ -61,7 +75,7 @@ Lists are filterable by a text search over trip ID and route, per list.
 - Search within a list.
 
 ## Navigation
-Entry point of the app. Rows lead to `/trips/{tripId}?serviceDate={serviceDate}`.
+Entry point of the app. Rows lead to `/trips/{tripId}`.
 
 ## Principles
 **Inherited**

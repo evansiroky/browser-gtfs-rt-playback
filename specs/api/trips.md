@@ -1,11 +1,16 @@
 # API: Trips
 
+Neither endpoint accepts a date. The service date of a trip is derived by the server
+([trip-activity](../behaviors/trip-activity.md)) and only ever returned, never supplied: the
+app shows the present and the retained window (at most the last hour), and there is no way
+to ask about another day.
+
 ## List
 `GET /api/v1/trips?list=<name>` where `<name>` is `active-with-realtime`,
 `active-without-realtime`, or `unscheduled-with-realtime` — the three lists defined in
-[trip-activity](../behaviors/trip-activity.md#the-three-lists). Missing or unknown `list`
-→ `400 bad_request`. `409 session_not_active` while dormant; `409 schedule_not_ready` until
-the schedule has loaded.
+[trip-activity](../behaviors/trip-activity.md#the-three-lists). Missing or unknown `list`, or
+any other query parameter → `400 bad_request`. `409 session_not_active` while dormant;
+`409 schedule_not_ready` until the schedule has loaded.
 
 The response contains the complete list (no pagination), in the order defined by
 trip-activity:
@@ -15,42 +20,71 @@ list:        string                                  // echo of the parameter
 generatedAt: epoch seconds
 trips: [{
   tripId:       string
-  serviceDate:  "YYYYMMDD"
+  serviceDate:  "YYYYMMDD"                           // derived, informational
   routeId:      string | null                        // from trips.txt, else the realtime reference
   routeShortName: string | null                      // from routes.txt; null if route unknown
   routeLongName:  string | null
   headsign:     string | null                        // trips.txt trip_headsign
-  scheduledStart: epoch seconds | null               // null when the trip is unknown
+  scheduledStart: epoch seconds | null               // the entry's span; null when the trip is unknown
   scheduledEnd:   epoch seconds | null
+  frequency: {                                       // null for plain trips
+    exactTimes:  boolean                             // true: an instance; false: the headway entry
+    headwaySecs: integer
+    windowStart: epoch seconds                       // frequencies.txt start_time on the service date
+    windowEnd:   epoch seconds
+  } | null
   realtime: {                                        // null for active-without-realtime
     vehicleIds:      string[]                        // distinct, from the latest snapshots
     hasVehiclePosition: boolean
     hasTripUpdate:      boolean
+    startTime:       string | null                   // the reference's start_time, as sent
     lastSeenAt:      epoch seconds | null            // newest vehicle timestamp, else feed timestamp
   } | null
-  reason: "unknown_trip" | "not_in_service" | "outside_scheduled_time" | null   // list 3 only
+  reason: "unknown_trip" | "not_in_service" | "missing_start_time"
+        | "unmatched_start_time" | "outside_scheduled_time" | null   // list 3 only
 }]
 ```
+For frequency trips `frequency` describes the row that makes the entry active (for a list 3
+row, the row nearest in time, or null when none applies). For `exact_times = 1` trips, rows
+for different instances share a `tripId` and differ in `scheduledStart`.
 
 ## Detail
-`GET /api/v1/trips/{tripId}?serviceDate=YYYYMMDD` — `tripId` is percent-encoded.
-`serviceDate` is optional; when omitted it is inferred as in
-[trip-activity](../behaviors/trip-activity.md#definitions) (active, else operating, else
-today). `409` statuses as for the list. `404 trip_not_found` when the trip is neither in the
-schedule nor present in any retained realtime data.
+`GET /api/v1/trips/{tripId}` — `tripId` is percent-encoded. **No query parameters are
+accepted**; any query parameter, `serviceDate` included, → `400 bad_request`. `409` statuses
+as for the list. `404 trip_not_found` when the trip ID is neither in the schedule nor present
+in any retained realtime data.
+
+The response describes the trip as it stands now, over everything retained for the trip ID:
+all its pings in the window (every vehicle, every frequency instance), whichever lists it is
+in, and its schedule data.
 
 ```
 tripId:      string
-serviceDate: "YYYYMMDD"
-list:        "active-with-realtime" | "active-without-realtime" | "unscheduled-with-realtime" | null
-reason:      same enum as above | null              // when list is unscheduled-with-realtime
-scheduled: {                                        // null when the trip ID is not in trips.txt
-  trip:        { [column: string]: string }         // every column of the trips.txt row, as text
-  route:       { [column: string]: string } | null  // every column of the routes.txt row; null if missing
+serviceDate: "YYYYMMDD"                              // derived: latest reference start_date, else per trip-activity
+classification: [{                                   // one per active entry or unmatched reference
+  list:   "active-with-realtime" | "active-without-realtime" | "unscheduled-with-realtime"
+  reason: same enum as the list | null
+  start:  epoch seconds | null                       // the entry's start, when it has one
+  end:    epoch seconds | null
+}]                                                   // empty: in no list
+scheduled: {                                         // null when the trip ID is not in trips.txt
+  trip:        { [column: string]: string }          // every column of the trips.txt row, as text
+  route:       { [column: string]: string } | null   // every column of the routes.txt row; null if missing
   operatesOnServiceDate: boolean
-  start:       epoch seconds                        // for serviceDate
-  end:         epoch seconds
-  activeNow:   boolean
+  start:       epoch seconds | null                  // plain: span start; frequency: earliest window start; null if not operating
+  end:         epoch seconds | null                  // plain: span end; frequency: latest window end + template duration
+  activeNow:   boolean                               // any entry overlaps the current minute
+  shapeId:     string | null                         // trips.txt shape_id; fetch via shapes.md
+  frequencies: [{                                    // null for plain trips
+    row:         { [column: string]: string }        // every column of the frequencies.txt row
+    exactTimes:  boolean
+    headwaySecs: integer
+    windowStart: epoch seconds
+    windowEnd:   epoch seconds
+    templateDurationSecs: integer
+    activeNow:   boolean
+    activeInstanceStarts: epoch seconds[]            // exact_times = 1 only; instances overlapping now
+  }] | null
 } | null
 realtime: {
   pings: [{                                         // ascending by sequence; retained window only
@@ -74,7 +108,7 @@ realtime: {
     scheduleRelationship: string | null             // trip descriptor's relationship
     routeId:     string | null                      // as carried in the trip descriptor
     directionId: integer | null
-    startTime:   string | null
+    startTime:   string | null                      // trip descriptor, as sent
     startDate:   string | null
   }]
   tripUpdate: {                                     // latest snapshot's update for this trip, or null
@@ -82,6 +116,7 @@ realtime: {
     timestamp:     epoch seconds | null
     delay:         integer | null                   // seconds
     vehicleId:     string | null
+    startTime:     string | null
     scheduleRelationship: string | null
     stopTimeUpdateCount:  integer
   } | null
@@ -89,11 +124,16 @@ realtime: {
 ```
 Other `VehiclePosition` fields present in the feed are passed through under their GTFS-RT
 names in camelCase so the screen can show "other info as available". Pings include every
-retained ping for the trip key, including pings from vehicles no longer reporting.
+retained ping for the trip ID, including pings from vehicles no longer reporting. When the
+latest snapshots hold several trip updates for the trip ID (different instances), the
+newest by `timestamp` is returned.
 
 ## Principles
 **Inherited**
-- [Show the feed as it is](../principles.md#show-the-feed-as-it-is) — schedule rows are
-  returned column-for-column and realtime fields pass through untouched.
+- [Show the feed as it is](../principles.md#show-the-feed-as-it-is) — schedule rows
+  (trip, route, frequency) are returned column-for-column and realtime fields pass through
+  untouched.
 - [Retain only what a screen shows](../principles.md#retain-only-what-a-screen-shows) —
   stop-level trip-update data is summarized by a count, not returned.
+- [Forget by default](../principles.md#forget-by-default) — no date parameter exists because
+  nothing older than the retained window does.
