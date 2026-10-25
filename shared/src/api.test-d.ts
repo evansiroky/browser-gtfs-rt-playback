@@ -42,6 +42,7 @@ describe('error envelope (conventions.md)', () => {
   it('pins the codes and the envelope', () => {
     expectTypeOf<ApiErrorCode>().toEqualTypeOf<
       | 'bad_request'
+      | 'not_found'
       | 'trip_not_found'
       | 'shape_not_found'
       | 'session_not_active'
@@ -52,6 +53,7 @@ describe('error envelope (conventions.md)', () => {
     expectTypeOf<typeof API_ERROR_CODES>().toEqualTypeOf<
       readonly [
         'bad_request',
+        'not_found',
         'trip_not_found',
         'shape_not_found',
         'session_not_active',

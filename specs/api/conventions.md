@@ -24,6 +24,7 @@ Non-2xx responses use one envelope:
 | Status | Code | Meaning |
 |---|---|---|
 | 400 | `bad_request` | Malformed or invalid parameter, or any query parameter an endpoint does not define |
+| 404 | `not_found` | No endpoint at this path and method |
 | 404 | `trip_not_found` | See [trips.md](trips.md) |
 | 404 | `shape_not_found` | See [shapes.md](shapes.md) |
 | 409 | `session_not_active` | The server is dormant; start or ping first |
@@ -37,7 +38,8 @@ Error text never contains a feed URL, credential, or stack trace.
 Each client address (taken from the platform's forwarded-address header) may make at most
 the configured number of `/api/v1` requests per minute (default 120,
 [configuration](../behaviors/configuration.md#tunables-and-defaults)). A normal browser
-issues about a dozen per minute.
+issues about a dozen per minute. An IPv6 client is identified by its /64 prefix, since one
+client typically controls a whole /64.
 
 ## Principles
 **Inherited**

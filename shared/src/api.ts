@@ -16,6 +16,7 @@ export type GtfsRow = Record<string, string>;
 
 export const API_ERROR_CODES = [
   'bad_request',
+  'not_found',
   'trip_not_found',
   'shape_not_found',
   'session_not_active',
