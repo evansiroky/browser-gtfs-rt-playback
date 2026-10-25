@@ -28,13 +28,14 @@ only *verifies*). Running against a real project is an operator action, not part
 
 | Thing | Value |
 |---|---|
-| State bucket | `<project-id>-tfstate`, versioned, uniform bucket-level access, label `gtfs-rt-debugger-bootstrap=true` |
+| State bucket | `<project-id>-tfstate`, versioned, uniform bucket-level access, public access prevention, label `gtfs-rt-debugger-bootstrap=true`. Bootstrap labels it only when it creates it or finds it empty (an interrupted run); a non-empty unlabeled bucket is refused |
 | WIF pool / provider id | `github` / `github` |
 | Provider attribute mapping | `google.subject=assertion.sub`, `attribute.repository=assertion.repository`, `attribute.target=assertion.job_workflow_ref.split('@')[0] + ':' + (assertion.event_name == 'pull_request' ? 'pr' : assertion.ref)` |
-| Provider attribute condition | `assertion.repository == '<owner>/<repo>'` |
-| Plan identity | SA `tf-plan`; WIF principalSet member `…/attribute.target/<owner/repo>/.github/workflows/infra.yml:pr`; roles: project viewer, `iam.securityReviewer`, `storage.objectAdmin` on the state bucket only (state lock) |
-| Apply identity | SA `tf-apply`; member `…/attribute.target/<owner/repo>/.github/workflows/infra.yml:refs/heads/main`; roles sufficient for infrastructure.md's resources (Cloud Run admin, Artifact Registry admin, Secret Manager admin, service-account admin, service usage consumer, `storage.objectAdmin` on the state bucket) |
-| Billing | `roles/billing.costsManager` for `tf-apply` on the billing account, only if the caller can grant it; otherwise print the exact command for an operator who can |
+| Provider attribute condition | `assertion.repository == '<owner>/<repo>'`. An existing provider whose condition, mapping or issuer differs is refused, never reused |
+| Plan identity | SA `tf-plan`; WIF principalSet member `…/attribute.target/<owner/repo>/.github/workflows/infra.yml:pr`; roles: project viewer, `iam.securityReviewer`; on the state bucket only, `storage.objectViewer` plus `storage.objectUser` conditioned on `resource.name.endsWith(".tflock")` (title `terraform-lock-objects`), so its only write access is to lock objects |
+| Apply identity | SA `tf-apply`; member `…/attribute.target/<owner/repo>/.github/workflows/infra.yml:refs/heads/main`; roles sufficient for infrastructure.md's resources (Cloud Run admin, Artifact Registry admin, Secret Manager admin, service-account admin, service-account user (`actAs` on the runtime SA), service usage consumer, `storage.objectAdmin` on the state bucket) |
+| Billing | `roles/billing.costsManager` for `tf-apply` and `roles/billing.viewer` for `tf-plan` (to plan the budget; exposes the billing account's spend, an accepted trade-off) on the billing account, only if the caller can grant them; otherwise print the exact commands for an operator who can |
+| GitHub repository variables | `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `GCP_REGION`, `TF_STATE_BUCKET` |
 
 Steps:
 1. `scripts/lib.sh`: strict mode (`set -euo pipefail`), `run()` that prints the command before
@@ -68,6 +69,12 @@ reachable). There is no real GCP project in this environment.
 - [ ] `bootstrap.sh --help` and `teardown.sh --help` document every flag and env fallback.
 - [ ] Naming contract table in `scripts/README.md` matches the constants in `lib.sh`.
 - [ ] Both scripts reject a malformed `owner/repo` and a missing project with a clear message.
+- [ ] `tf-plan` holds no unconditional write role on the state bucket; its only write grant is
+      the lock-object conditional binding.
+- [ ] Bootstrap refuses a non-empty unlabeled state bucket and a provider that does not match
+      the contract, making no changes; it adopts an empty unlabeled bucket.
+- [ ] Teardown fails closed: a describe error other than NOT_FOUND aborts it (non-zero exit,
+      state bucket not deleted), and Terraform never runs against an unlabeled bucket.
 - [ ] Live run of `bootstrap.sh` then `teardown.sh` against a throwaway real GCP project
       (cannot be verified in this environment; operator step).
 
