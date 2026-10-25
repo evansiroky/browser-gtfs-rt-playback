@@ -43,6 +43,20 @@ export function headerTimestamp(message: FeedMessage): number | null {
   return typeof value === 'number' ? value : value.toNumber();
 }
 
+/**
+ * Built outside {@link SnapshotStore.add} on purpose: a closure shares its scope with every other
+ * closure created there, so `decode` must not be created next to one that captures the decoded
+ * message, or each retained snapshot would keep its decoded message alive.
+ */
+function createSnapshot(
+  feed: FeedKind,
+  receivedAt: number,
+  feedTimestamp: number | null,
+  bytes: Uint8Array,
+): Snapshot {
+  return { feed, receivedAt, feedTimestamp, bytes, decode: () => decodeFeed(bytes) };
+}
+
 export interface SnapshotStoreOptions {
   clock: Clock;
   /** Receives listener failures. */
@@ -87,13 +101,7 @@ export class SnapshotStore {
 
   /** Records a successful fetch. `message` is the already-decoded `bytes`, passed to listeners. */
   add(feed: FeedKind, bytes: Uint8Array, message: FeedMessage): Snapshot {
-    const snapshot: Snapshot = {
-      feed,
-      receivedAt: this.#clock.now(),
-      feedTimestamp: headerTimestamp(message),
-      bytes,
-      decode: () => decodeFeed(bytes),
-    };
+    const snapshot = createSnapshot(feed, this.#clock.now(), headerTimestamp(message), bytes);
     this.#snapshots[feed].push(snapshot);
     this.#bytes += bytes.byteLength;
     this.prune();

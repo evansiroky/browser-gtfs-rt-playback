@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { FakeClock } from '../clock.js';
 import { encodeFeed } from '../test-support/feeds.js';
@@ -159,5 +160,32 @@ describe('SnapshotStore', () => {
     expect(() => store.clear()).not.toThrow();
     expect(store.latest('vehiclePositions')).toBeNull();
     expect(later).toBe(1);
+  });
+
+  it('does not keep decoded messages alive through retained snapshots', () => {
+    // Runs the built store under --expose-gc (`npm test` builds first).
+    const store = new URL('../../dist/realtime/snapshot-store.js', import.meta.url).href;
+    const script = `
+      const { SnapshotStore, decodeFeed, transit_realtime } = await import(${JSON.stringify(store)});
+      const logger = { error() {} };
+      const clock = { now: () => Date.now() };
+      const s = new SnapshotStore({ clock, logger, retentionMs: 3600000, memoryLimitBytes: 1e9 });
+      s.onSnapshot(() => {});
+      const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0' } }).finish();
+      let message = decodeFeed(bytes);
+      const ref = new WeakRef(message);
+      s.add('vehiclePositions', bytes, message);
+      message = undefined;
+      await new Promise((r) => setTimeout(r, 0));
+      globalThis.gc();
+      process.stdout.write(String(ref.deref() === undefined && s.latest('vehiclePositions') !== null));
+    `;
+    const output = execFileSync(process.execPath, [
+      '--expose-gc',
+      '--input-type=module',
+      '-e',
+      script,
+    ]);
+    expect(output.toString()).toBe('true');
   });
 });
