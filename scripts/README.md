@@ -45,18 +45,27 @@ To undo: `scripts/teardown.sh --project <project-id> --repo <owner>/<repo>`.
 
 Idempotent: every step checks first and creates only what is missing, so re-running after a
 partial failure finishes the job and a full re-run makes no changes. It never creates a
-service-account key. In order, it:
+service-account key. It never adopts what it did not create. In order, it:
 
 1. Verifies the project exists and is active, billing is linked (otherwise it prints the
    `gcloud billing projects link` command and stops), and `--repo` is a full `owner/repo`.
+   Then, before changing anything, it refuses the two things it must never adopt (below).
 2. Enables the APIs listed in the contract below (not Cloud Build: images are built in CI).
 3. Creates the state bucket in `--region` with uniform bucket-level access and public access
-   prevention, then turns on versioning and adds the bootstrap label. An existing bucket
-   only gets whichever of versioning or the label it lacks.
+   prevention, then turns on versioning and adds the bootstrap label. If the bucket already
+   exists in the project:
+   - **labeled**: it only gets versioning if it lacks it;
+   - **unlabeled and empty** (what an interrupted run leaves): it is adopted (versioned and
+     labeled);
+   - **unlabeled and not empty**: bootstrap refuses it and stops, because the label is what
+     lets teardown delete the bucket with every version. It prints the
+     `gcloud storage buckets update ... --update-labels=...` command to adopt it deliberately,
+     if it really is this app's state bucket. No role is granted on a refused bucket.
 4. Creates the Workload Identity pool and GitHub OIDC provider. A pool or provider deleted
    in the last 30 days (still soft-deleted, so its ID cannot be reused) is undeleted. An
-   existing provider restricted to a different repository is an error: bootstrap does not
-   change it, but prints the `update-oidc` command that would.
+   existing provider (active or soft-deleted) whose attribute condition, attribute mapping
+   or issuer differs from the contract is refused, never reused or undeleted. Bootstrap
+   stops and prints the `update-oidc` command that would make it conform.
 5. Creates the `tf-plan` and `tf-apply` service accounts, then adds their project, state
    bucket and Workload Identity bindings.
 6. Grants the billing roles on the project's billing account. If you cannot (you are not
@@ -66,6 +75,11 @@ service-account key. In order, it:
 
 A binding that fails right after its service account was created (IAM is eventually
 consistent) is fixed by re-running the script.
+
+Every check fails closed. Only an explicit `NOT_FOUND` (or 404) from gcloud counts as
+"absent". Any other error stops the script with gcloud's message: permission denied, a
+disabled API, a network failure. Under `--dry-run`, resources behind an API the run would
+enable are assumed absent.
 
 ## teardown.sh
 
@@ -79,21 +93,29 @@ The escape hatch, and the way to remove the app entirely. In order, it:
    against the state bucket, passing `TF_VAR_project_id`, `TF_VAR_region`,
    `TF_VAR_github_repository`, `TF_VAR_wif_pool` and `TF_VAR_billing_account`. If the
    destroy fails, teardown stops, keeping the state and the identities so you can fix the
-   problem and re-run. If the state bucket is already gone, the step is skipped with a
-   warning: anything Terraform created must then be removed by hand, or with
-   `--delete-project`.
-3. Removes every project-level and billing-account binding of `tf-plan` and `tf-apply`
-   (any role, including ones added by hand), deletes both service accounts, deletes the
-   provider and then the pool (both soft-delete for 30 days, and bootstrap undeletes them),
-   and deletes the state bucket with every object version, **only if it carries the
-   bootstrap label**. A bucket without the label is left untouched, with a warning.
+   problem and re-run. If the state bucket is gone, or lacks the bootstrap label (so it is
+   not bootstrap's), the step is skipped with a warning: anything Terraform created must
+   then be removed by hand, or with `--delete-project`.
+3. Removes every project-level and billing-account binding of `tf-plan` and `tf-apply`:
+   - any role or condition, including roles added by hand. Project bindings are removed with
+     `--all`, and `deleted:serviceAccount:<email>?uid=...` leftovers are removed too.
+   - Bindings of any other principal are left alone.
+   - A billing binding that is already gone is skipped. Any other failure stops teardown.
+
+   It then deletes both service accounts, and the provider and then the pool (both
+   soft-delete for 30 days; bootstrap undeletes them). Last, it deletes the state bucket with
+   every object version, **only if the bucket carries the bootstrap label**. A bucket without
+   the label is left untouched, with a warning.
 4. With `--delete-project`, asks for the project ID a second time (or
    `--confirm-delete-project`), then shuts down the whole project as the last step.
    Without it, the project and its billing link are left alone.
 
-Everything is found by the fixed names below. A resource that is already gone is skipped,
-so teardown can be re-run after a partial failure. Cloud Storage keeps deleted objects for
-its soft-delete period (7 days by default); this costs next to nothing.
+Everything is found by the fixed names below. A resource that gcloud reports as `NOT_FOUND`
+is skipped, so teardown can be re-run after a partial failure. Any other error stops it with
+a non-zero exit, before the state bucket is deleted: permission denied, a network failure.
+The bucket is deleted only after every earlier step has succeeded, so its state is never
+lost while the resources it describes remain. Cloud Storage keeps deleted objects for its
+soft-delete period (7 days by default); this costs next to nothing.
 
 ## Naming contract
 
@@ -104,18 +126,18 @@ is the project's number.
 
 | Thing | Value |
 |---|---|
-| State bucket | `<project-id>-tfstate`: versioned, uniform bucket-level access, public access prevention, label `gtfs-rt-debugger-bootstrap=true`, location `--region` |
+| State bucket | `<project-id>-tfstate`: versioned, uniform bucket-level access, public access prevention, label `gtfs-rt-debugger-bootstrap=true`, location `--region`. Labeled only when bootstrap creates it or finds it empty; a non-empty unlabeled bucket is refused |
 | Terraform state prefix | set by `infra/`'s backend block, not by bootstrap |
 | WIF pool | `github`, location `global`: `projects/<project-number>/locations/global/workloadIdentityPools/github` |
 | WIF provider | `github` (OIDC, issuer `https://token.actions.githubusercontent.com`, default audience): `projects/<project-number>/locations/global/workloadIdentityPools/github/providers/github` |
 | Provider attribute mapping | `google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.target=assertion.job_workflow_ref.split('@')[0] + ':' + (assertion.event_name == 'pull_request' ? 'pr' : assertion.ref)` |
-| Provider attribute condition | `assertion.repository == '<owner>/<repo>'` |
+| Provider attribute condition | `assertion.repository == '<owner>/<repo>'` (an existing provider with any other condition, mapping or issuer is refused) |
 | Infrastructure workflow | `.github/workflows/infra.yml` |
 | Plan identity | `tf-plan@<project-id>.iam.gserviceaccount.com` (service account `tf-plan`) |
 | Plan member (`roles/iam.workloadIdentityUser` on `tf-plan`) | `principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.target/<owner>/<repo>/.github/workflows/infra.yml:pr` |
 | Plan roles, project | `roles/viewer`, `roles/iam.securityReviewer` |
-| Plan roles, state bucket only | `roles/storage.objectAdmin` (state read and lock) |
-| Plan roles, billing account | `roles/billing.viewer` (lets `terraform plan` read the budget), if the operator can grant it |
+| Plan roles, state bucket only | `roles/storage.objectViewer` (read state), plus `roles/storage.objectUser` with the IAM condition `resource.name.endsWith(".tflock")` (title `terraform-lock-objects`): its only write access is to Terraform lock objects |
+| Plan roles, billing account | `roles/billing.viewer` (lets `terraform plan` read the budget; see below), if the operator can grant it |
 | Apply identity | `tf-apply@<project-id>.iam.gserviceaccount.com` (service account `tf-apply`) |
 | Apply member (`roles/iam.workloadIdentityUser` on `tf-apply`) | `principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.target/<owner>/<repo>/.github/workflows/infra.yml:refs/heads/main` |
 | Apply roles, project | `roles/run.admin`, `roles/artifactregistry.admin`, `roles/secretmanager.admin`, `roles/iam.serviceAccountAdmin`, `roles/iam.serviceAccountUser`, `roles/serviceusage.serviceUsageConsumer` |
@@ -129,6 +151,27 @@ The `attribute.target` attribute is `<owner>/<repo>/<workflow path>:<target>`, w
 impersonated only by `infra.yml` running for a pull request, and `tf-apply` only by
 `infra.yml` running on `refs/heads/main`. The **deploy** identity is created by Terraform
 (`infra/`), with the member `…/attribute.target/<owner>/<repo>/.github/workflows/deploy.yml:refs/heads/main`.
+
+### What tf-plan can see on the billing account
+
+`terraform plan` must read the billing budget, and the only predefined role that allows it is
+`roles/billing.viewer` on the whole billing account. It also exposes the spend and cost
+information of **every project on that billing account** to anything running as `tf-plan`,
+including the infrastructure workflow of any same-repository pull request. This is an
+accepted trade-off ([`specs/infrastructure.md`](../specs/infrastructure.md#principles)).
+Link the project to a **billing account dedicated to it**, so the exposure covers only this
+app's own spend. If that is not possible, do not grant the role (bootstrap then prints the
+command instead) and run Terraform with `-var=manage_budget=false`.
+
+### Unconfirmed: the attribute mapping's `split`
+
+The `attribute.target` mapping uses the CEL string function
+`assertion.job_workflow_ref.split('@')[0]`. Google documents the attribute-mapping CEL
+dialect separately from gcloud, and gcloud's help could not confirm that `split` is
+supported. The first live bootstrap should confirm it: `create-oidc` fails if the expression
+is rejected. If it is rejected, the fallback is `assertion.job_workflow_ref.extract('{w}@')`.
+That fallback changes the contract here, in `lib.sh`, and in every consumer of the
+member strings.
 
 ### GitHub repository variables
 
