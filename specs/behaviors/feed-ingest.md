@@ -52,10 +52,11 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   snapshots untouched ([Stale-with-age beats blocking](../principles.md#stale-with-age-beats-blocking)).
   A realtime feed is considered **stale** when its latest successful fetch is older than
   three poll intervals.
-- Redirects are followed up to 3 hops, to `http`/`https` only, and never to a different host
-  that is internal: `localhost`, a `.internal` name (such as the cloud metadata server), or a
-  literal loopback, link-local, private-range or unspecified IP address. The configured URL
-  itself is the operator's choice and is not restricted. Responses may be gzip-encoded.
+- Redirects are followed up to 3 hops, to `http`/`https` only, and never away from the
+  configured URL's origin to an internal host: `localhost`, a `.internal` name (such as the
+  cloud metadata server), or a literal loopback, link-local, private-range or unspecified IP
+  address. The configured URL itself is the operator's choice and is not restricted.
+  Responses may be gzip-encoded.
 
 ## Never exposed
 No error message, status field, or log line includes a feed URL or its query string.
