@@ -42,7 +42,9 @@ eviction (`historyStartsAt`), and are forgotten on dormancy.
    active lookup for tens of thousands of trips (pre-index by start/end offsets; do not scan every
    trip every request without an index).
 3. `references.ts`: extract refs from the latest VP/TU snapshots (trip id, start_date,
-   start_time, vehicle id, route/direction, relationship, timestamps), service-date inference.
+   start_time, vehicle id, route/direction, relationship, timestamps), service-date inference
+   (step 1 uses the reference's `start_time` to pick the instance for frequency trips; ties go to
+   the later date, per trip-activity.md).
 4. `classify.ts`: matching and the lists/stats/reasons exactly as written.
 5. `pings.ts`: `PingStore` subscribed to `SnapshotStore.onSnapshot/onEvict`; identity
    `(tripId, vehicleId, timestamp)`; fallbacks; sequence counters per trip ID that survive
