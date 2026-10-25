@@ -24,6 +24,7 @@ Non-2xx responses use one envelope:
 | Status | Code | Meaning |
 |---|---|---|
 | 400 | `bad_request` | Malformed or invalid parameter, or any query parameter an endpoint does not define |
+| 404 | `not_found` | No endpoint at this path and method |
 | 404 | `trip_not_found` | See [trips.md](trips.md) |
 | 404 | `shape_not_found` | See [shapes.md](shapes.md) |
 | 409 | `session_not_active` | The server is dormant; start or ping first |
