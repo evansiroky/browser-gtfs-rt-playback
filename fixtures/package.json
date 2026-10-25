@@ -1,0 +1,30 @@
+{
+  "name": "@gtfs-rt-debugger/fixtures",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "tsc -b && vitest run",
+    "build": "tsc -b",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "fake-feeds": "tsc -b && node dist/server.js"
+  },
+  "dependencies": {
+    "@gtfs-rt-debugger/shared": "*",
+    "fflate": "^0.8.3",
+    "gtfs-realtime-bindings": "^2.2.0"
+  }
+}
