@@ -17,14 +17,15 @@
 Times are rendered in the agency timezone ([Agency-local time](../principles.md#agency-local-time));
 until the timezone is known, no clock time is shown.
 
-**Session banner** (at most one, above everything else):
+**Session banner** (at most one, above everything else). When several conditions hold, the
+first row that applies is shown:
 | Condition | Banner |
 |---|---|
+| Session `dormant` with `endedReason = max-duration` | "Session ended after the maximum running time." with a **Restart** action (calls start). Outranks "paused": while the session is ended nothing is sent, so a paused notice promising that interaction resumes would be false |
 | Page paused (hidden tab or 60 s without interaction) | "Paused — …" naming the reason; any interaction resumes ([client-activity](../behaviors/client-activity.md#paused)) |
-| Session `dormant` with `endedReason = max-duration` | "Session ended after the maximum running time." with a **Restart** action (calls start) |
 | Request to the API fails entirely (network/5xx) | "Can't reach the server." — last data stays visible |
-| `schedule.state = loading` | "Downloading the schedule…" (realtime statistics already update) |
 | `schedule.state = failed` | the schedule error and a **Retry** action (calls start) |
+| `schedule.state = loading` | "Downloading the schedule…" (realtime statistics already update) |
 | Any configured realtime feed `stale` | which feed is stale and the age of its last successful update |
 
 **Agency** — agency name(s) (comma-separated if several), the IANA timezone, and the
