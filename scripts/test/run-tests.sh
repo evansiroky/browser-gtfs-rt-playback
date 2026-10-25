@@ -18,7 +18,7 @@ cp "$SCRIPTS/lib.sh" "$SCRIPTS/bootstrap.sh" "$SCRIPTS/teardown.sh" "$SUT/"
 # Only these tools are visible to the scripts under test, besides the fakes.
 TOOLS=$ROOT/tools
 mkdir -p "$TOOLS"
-for tool in bash env cat grep sed mkdir rm ls mv touch sort tr dirname; do
+for tool in bash env cat grep sed mkdir mktemp rm ls mv touch sort tr dirname; do
   ln -s "$(command -v "$tool")" "$TOOLS/$tool"
 done
 
@@ -62,8 +62,15 @@ new_project() {
   printf 'roles/owner\tuser:operator@example.com\n' >"$S/project_iam"
 }
 
+# enable_all_apis: as after a completed bootstrap (or an operator who enabled them).
+enable_all_apis() {
+  printf '%s.googleapis.com\n' run artifactregistry secretmanager iam iamcredentials sts \
+    cloudresourcemanager serviceusage billingbudgets storage >"$S/services"
+}
+
 # invoke [VAR=value ...] <script> [args...]: runs scripts/<script> with only the given
-# environment. INPUT (if set) is fed on stdin; NO_TERRAFORM=1 hides the fake terraform.
+# environment. INPUT (if set) is fed on stdin, CLOSED_STDIN=1 gives it an empty stdin
+# (immediate EOF), and NO_TERRAFORM=1 hides the fake terraform.
 invoke() {
   local envs=()
   while [[ $1 == *=* ]]; do
@@ -76,12 +83,16 @@ invoke() {
   if [[ ${NO_TERRAFORM:-0} == 1 ]]; then
     path="$HERE/fake-bin:$TOOLS"
   fi
+  local input=$W/stdin
+  if [[ ${CLOSED_STDIN:-0} == 1 ]]; then
+    : >"$input"
+  else
+    printf '%s\n' "${INPUT:-}" >"$input"
+  fi
   : >"$LOG"
-  set +e
-  env -i HOME="$W" PATH="$path" FAKE_STATE="$S" FAKE_LOG="$LOG" FAKE_TF_FAIL="${FAKE_TF_FAIL:-}" \
-    ${envs[@]+"${envs[@]}"} "$SUT/$script" "$@" <<<"${INPUT:-}" >"$OUT" 2>&1
-  RC=$?
-  set -e
+  RC=0
+  env -i HOME="$W" TMPDIR="$W" PATH="$path" FAKE_STATE="$S" FAKE_LOG="$LOG" FAKE_TF_FAIL="${FAKE_TF_FAIL:-}" \
+    ${envs[@]+"${envs[@]}"} "$SUT/$script" "$@" <"$input" >"$OUT" 2>&1 || RC=$?
   cat "$LOG" >>"$ROOT/all-calls.log"
   if grep -q '^unsupported' "$LOG"; then
     fail "$script made a call the fake gcloud does not implement: $(grep '^unsupported' "$LOG")"
@@ -120,14 +131,21 @@ assert_no_calls() { [[ ! -s $LOG ]] || fail "expected no calls at all, got: $(ca
 assert_file() { [[ -e $S/$1 ]] || fail "expected state $1 to exist"; }
 assert_no_file() { [[ ! -e $S/$1 ]] || fail "expected state $1 to be gone"; }
 assert_content() { [[ $(cat "$S/$1") == "$2" ]] || fail "state $1 is '$(cat "$S/$1")', expected '$2'"; }
-assert_row() { grep -Fxq -- "$2$TAB$3" "$S/$1" || fail "state $1 lacks binding $2 -> $3"; }
+# assert_row <policy file> <role> <member> [<condition expression>]: exactly that binding.
+assert_row() {
+  local line="$2$TAB$3"
+  if [[ -n ${4:-} ]]; then
+    line+="$TAB$4"
+  fi
+  grep -Fxq -- "$line" "$S/$1" || fail "state $1 lacks binding $2 -> $3${4:+ if $4}"
+}
 assert_no_row() { ! grep -Fq -- "$2" "$S/$1" 2>/dev/null || fail "state $1 still references $2"; }
 
 # assert_order <pattern>...: each pattern's first mutating call comes after the previous one's.
 assert_order() {
   local pattern line last=0
   for pattern in "$@"; do
-    line=$(grep -n '^mutate ' "$LOG" | grep -F -- "$pattern" | head -n 1 | sed 's/:.*//')
+    line=$(grep -n '^mutate ' "$LOG" | grep -F -- "$pattern" | sed -n '1s/:.*//p')
     [[ -n $line ]] || fail "no mutating call matching: $pattern"
     [[ $line -gt $last ]] || fail "'$pattern' (call $line) ran before the previous step (call $last)"
     last=$line
@@ -175,8 +193,16 @@ test_bootstrap_creates_everything_in_order() {
   [[ $(grep -c "serviceAccount:$PLAN_SA" "$S/project_iam") -eq 2 ]] || fail "tf-plan has extra project roles"
   ! grep -Eq 'roles/(owner|editor)' <(grep 'serviceAccount:' "$S/project_iam") || fail "an identity got owner/editor"
   ! grep -q 'storage' "$S/project_iam" || fail "storage roles must be on the state bucket only"
-  assert_row "buckets/$BUCKET/iam" roles/storage.objectAdmin "serviceAccount:$PLAN_SA"
+  # tf-apply reads and writes state; tf-plan reads it and may write only lock objects.
   assert_row "buckets/$BUCKET/iam" roles/storage.objectAdmin "serviceAccount:$APPLY_SA"
+  assert_row "buckets/$BUCKET/iam" roles/storage.objectViewer "serviceAccount:$PLAN_SA"
+  assert_row "buckets/$BUCKET/iam" roles/storage.objectUser "serviceAccount:$PLAN_SA" 'resource.name.endsWith(".tflock")'
+  [[ $(grep -c "serviceAccount:$PLAN_SA" "$S/buckets/$BUCKET/iam") -eq 2 ]] || fail "tf-plan has extra bucket roles"
+  [[ $(grep -c "serviceAccount:$APPLY_SA" "$S/buckets/$BUCKET/iam") -eq 1 ]] || fail "tf-apply has extra bucket roles"
+  if grep -Eq "^roles/storage\.(objectAdmin|objectUser|objectCreator|admin)${TAB}serviceAccount:$PLAN_SA\$" "$S/buckets/$BUCKET/iam"; then
+    fail "tf-plan holds an unconditional write role on the state bucket"
+  fi
+  assert_called "--condition=expression=resource.name.endsWith(\".tflock\"),title=terraform-lock-objects --member=serviceAccount:$PLAN_SA --role=roles/storage.objectUser"
   assert_row billing_iam roles/billing.costsManager "serviceAccount:$APPLY_SA"
   assert_row billing_iam roles/billing.viewer "serviceAccount:$PLAN_SA"
   # Printed GitHub variables and next steps.
@@ -217,13 +243,16 @@ test_bootstrap_rerun_is_idempotent() {
 
 test_bootstrap_completes_a_partial_run() {
   new_project
-  # As if a first run stopped right after creating the bucket and the pool.
+  # As if a first run stopped right after creating the bucket (empty, not yet labeled)
+  # and the pool.
+  enable_all_apis
   mkdir -p "$S/buckets/$BUCKET"
   echo ACTIVE >"$S/pool"
   bootstrap_ok
   assert_not_called "storage buckets create"
   assert_not_called "workload-identity-pools create github"
   assert_called "storage buckets update gs://$BUCKET --versioning --update-labels=gtfs-rt-debugger-bootstrap=true"
+  assert_out "empty and unlabeled (left by an interrupted run): adopting it"
   assert_called "providers create-oidc github"
   bootstrap_ok
   assert_no_mutations
@@ -274,20 +303,91 @@ test_bootstrap_without_billing_permission_prints_the_commands() {
   assert_out "gcloud billing accounts add-iam-policy-binding $ACCOUNT --member=serviceAccount:$PLAN_SA --role=roles/billing.viewer"
 }
 
-test_bootstrap_refuses_a_provider_bound_to_another_repo() {
+test_bootstrap_refuses_a_non_empty_unlabeled_bucket() {
+  new_project
+  enable_all_apis
+  mkdir -p "$S/buckets/$BUCKET"
+  echo "someone-elses/terraform.tfstate" >"$S/buckets/$BUCKET/objects"
+  invoke bootstrap.sh --project "$PROJECT" --repo "$REPO"
+  assert_rc 1
+  assert_out "exists without the bootstrap label gtfs-rt-debugger-bootstrap=true and is not empty; refusing to adopt it"
+  assert_out "gcloud storage buckets update gs://$BUCKET --versioning --update-labels=gtfs-rt-debugger-bootstrap=true"
+  assert_no_mutations
+  assert_no_file "buckets/$BUCKET/labels"
+  assert_no_file "buckets/$BUCKET/iam"
+  # Refused before anything else, even on a project whose other APIs are still disabled.
+  printf 'serviceusage.googleapis.com\nstorage.googleapis.com\n' >"$S/services"
+  invoke bootstrap.sh --project "$PROJECT" --repo "$REPO"
+  assert_rc 1
+  assert_no_mutations
+}
+
+# provider_refused <setup description>: bootstrap must stop on the existing provider
+# without changing anything.
+provider_refused() {
+  invoke bootstrap.sh --project "$PROJECT" --repo "$REPO"
+  assert_rc 1
+  assert_out "existing provider 'github' does not match the contract; bootstrap never reuses it"
+  assert_out "$1"
+  assert_out "providers update-oidc github"
+  assert_no_mutations
+}
+
+test_bootstrap_refuses_a_non_conforming_provider() {
   new_project
   bootstrap_ok
   echo "assertion.repository == 'someone/else'" >"$S/provider_condition"
+  provider_refused "attribute condition is \"assertion.repository == 'someone/else'\""
+  # A condition that merely contains the right repository is not the contract's.
+  echo "assertion.repository == '$REPO' || true" >"$S/provider_condition"
+  provider_refused "attribute condition is \"assertion.repository == '$REPO' || true\""
+  : >"$S/provider_condition"
+  provider_refused "attribute condition is \"<none>\""
+  echo "$CONDITION" >"$S/provider_condition"
+  echo "https://token.actions.example.com" >"$S/provider_issuer"
+  provider_refused "issuer is \"https://token.actions.example.com\""
+  echo "https://token.actions.githubusercontent.com" >"$S/provider_issuer"
+  echo "google.subject=assertion.sub,attribute.repository=assertion.repository" >"$S/provider_mapping"
+  provider_refused "attribute mapping is"
+  # Conforming again: accepted, nothing to change.
+  echo "$MAPPING" >"$S/provider_mapping"
+  bootstrap_ok
+  assert_no_mutations
+  assert_out "provider exists and matches the contract"
+}
+
+test_bootstrap_does_not_undelete_a_non_conforming_provider() {
+  new_project
+  bootstrap_ok
+  echo DELETED >"$S/provider"
+  echo "assertion.repository == 'someone/else'" >"$S/provider_condition"
+  provider_refused "attribute condition is"
+}
+
+test_bootstrap_stops_when_the_provider_cannot_be_read() {
+  new_project
+  bootstrap_ok
+  echo "providers describe" >"$S/deny"
   invoke bootstrap.sh --project "$PROJECT" --repo "$REPO"
   assert_rc 1
-  assert_out "expected \"$CONDITION\""
-  assert_out "providers update-oidc"
+  assert_out "read-only check failed, stopping rather than guessing"
+  assert_no_mutations
+}
+
+test_bootstrap_stops_when_bucket_labels_cannot_be_read() {
+  new_project
+  bootstrap_ok
+  : >"$S/buckets/$BUCKET/labels"
+  echo "json(labels)" >"$S/deny"
+  invoke bootstrap.sh --project "$PROJECT" --repo "$REPO"
+  assert_rc 1
+  assert_out "read-only check failed"
   assert_no_mutations
 }
 
 test_bootstrap_bucket_name_taken_elsewhere() {
   new_project
-  echo "$BUCKET" >"$S/foreign_buckets"
+  mkdir -p "$S/foreign/$BUCKET"
   invoke bootstrap.sh --project "$PROJECT" --repo "$REPO"
   assert_rc 1
   assert_out "is it taken by another project?"
@@ -312,7 +412,8 @@ test_bootstrap_rejects_bad_inputs() {
   assert_out "missing project ID: pass --project <project-id> or set PROJECT_ID"
   assert_no_calls
   local repo
-  for repo in gtfs-rt-debugger octo-org/ /gtfs-rt-debugger octo-org/a/b https://github.com/octo-org/gtfs-rt-debugger "octo org/x" -octo/x octo/..; do
+  for repo in gtfs-rt-debugger octo-org/ /gtfs-rt-debugger octo-org/a/b https://github.com/octo-org/gtfs-rt-debugger \
+    "octo org/x" -octo/x octo/.. "a/b' || true || '" "a/b'" 'a/b"' "a/b\\" "a/b c" "a/\$(id)"; do
     invoke bootstrap.sh --project "$PROJECT" --repo "$repo"
     assert_rc 2
     assert_out "GitHub repository must be a full owner/repo"
@@ -367,6 +468,21 @@ test_teardown_refuses_without_confirmation() {
   assert_no_mutations
   invoke teardown.sh "${teardown_args[@]}" --confirm-project other-project-9
   assert_rc 1
+  assert_no_mutations
+  # Patterns are not the project ID.
+  local answer
+  for answer in '*' 'test-project-?' 'test-project-[0-9]' " $PROJECT" "$PROJECT "; do
+    INPUT=$answer invoke teardown.sh "${teardown_args[@]}"
+    assert_rc 1
+    assert_no_mutations
+    invoke teardown.sh "${teardown_args[@]}" --confirm-project "$answer"
+    assert_rc 1
+    assert_no_mutations
+  done
+  # Closed stdin (EOF before any answer) refuses too.
+  CLOSED_STDIN=1 invoke teardown.sh "${teardown_args[@]}"
+  assert_rc 1
+  assert_out "nothing was changed"
   assert_no_mutations
   assert_file "sa/$PLAN_SA"
 }
@@ -425,8 +541,13 @@ test_teardown_rerun_tolerates_already_gone() {
   assert_no_mutations
   assert_out "already gone"
   assert_out "no Terraform state to destroy"
-  # A never-bootstrapped project is fine too.
+  # A never-bootstrapped project is fine too, with the APIs still disabled or enabled.
   new_project
+  invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
+  assert_rc 0
+  assert_no_mutations
+  assert_out "IAM API not enabled: no identities to remove"
+  enable_all_apis
   invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
   assert_rc 0
   assert_no_mutations
@@ -455,9 +576,123 @@ test_teardown_never_deletes_an_unlabeled_bucket() {
   assert_out "does not carry the label gtfs-rt-debugger-bootstrap=true"
   assert_not_called "storage rm"
   assert_file "buckets/$BUCKET"
-  # A different label value is not bootstrap's label either.
-  echo "gtfs-rt-debugger-bootstrap=false" >"$S/buckets/$BUCKET/labels"
+  # Near misses are not bootstrap's label either.
+  local labels
+  for labels in "gtfs-rt-debugger-bootstrap=false" "gtfs-rt-debugger-bootstrap=true-ish" \
+    "gtfs-rt-debugger-bootstrap=truex" "x-gtfs-rt-debugger-bootstrap=true" "gtfs-rt-debugger-bootstrap-old=true"; do
+    echo "$labels" >"$S/buckets/$BUCKET/labels"
+    invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
+    assert_rc 0
+    assert_not_called "storage rm"
+    assert_file "buckets/$BUCKET"
+  done
+}
+
+test_teardown_does_not_run_terraform_against_an_unlabeled_bucket() {
+  new_project
+  bootstrap_ok
+  : >"$S/buckets/$BUCKET/labels"
+  invoke teardown.sh "${teardown_args[@]}" --confirm-project "$PROJECT"
+  assert_rc 0
+  assert_out "not running Terraform against it"
+  assert_not_called "terraform"
+  assert_not_called "storage rm"
+  assert_out "Teardown complete, with the warnings above"
+}
+
+test_teardown_ignores_a_same_name_bucket_in_another_project() {
+  new_project
+  bootstrap_ok
   invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
+  assert_rc 0
+  # The name now belongs to another project's bucket, even one carrying the label.
+  mkdir -p "$S/foreign/$BUCKET"
+  echo "gtfs-rt-debugger-bootstrap=true" >"$S/foreign/$BUCKET/labels"
+  invoke teardown.sh "${teardown_args[@]}" --confirm-project "$PROJECT"
+  assert_rc 0
+  assert_not_called "terraform"
+  assert_not_called "storage rm"
+  assert_not_called "storage buckets describe"
+  assert_file "foreign/$BUCKET/labels"
+}
+
+# teardown_aborts <deny pattern>: with that read-only call denied, teardown must stop with
+# an error before deleting the state bucket.
+teardown_aborts() {
+  new_project
+  bootstrap_ok
+  echo "$1" >"$S/deny"
+  invoke teardown.sh "${teardown_args[@]}" --confirm-project "$PROJECT"
+  [[ $RC -ne 0 ]] || fail "teardown succeeded although '$1' was denied"
+  assert_out "read-only check failed, stopping rather than guessing"
+  assert_not_out "Teardown complete"
+  assert_not_called "storage rm"
+  assert_file "buckets/$BUCKET"
+}
+
+test_teardown_fails_closed_when_checks_are_denied() {
+  local pattern
+  for pattern in "workload-identity-pools describe" "providers describe" \
+    "service-accounts describe $PLAN_SA" "service-accounts describe $APPLY_SA" "json(labels)" \
+    "projects get-iam-policy" "storage buckets list"; do
+    teardown_aborts "$pattern"
+  done
+  # Denied label read with --skip-terraform: everything else may go, the bucket stays.
+  new_project
+  bootstrap_ok
+  echo "json(labels)" >"$S/deny"
+  invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
+  assert_rc 1
+  assert_not_called "storage rm"
+  assert_file "buckets/$BUCKET"
+}
+
+test_teardown_removes_conditional_and_stale_bindings_only_for_its_identities() {
+  new_project
+  bootstrap_ok
+  # The same role twice (once conditional), a binding left by a deleted copy of tf-plan,
+  # and look-alike / unrelated service accounts that teardown must not touch.
+  printf 'roles/run.admin\tserviceAccount:%s\trequest.time < timestamp("2030-01-01T00:00:00Z")\n' "$APPLY_SA" >>"$S/project_iam"
+  printf 'roles/viewer\tdeleted:serviceAccount:%s?uid=1234567890\n' "$PLAN_SA" >>"$S/project_iam"
+  local other
+  for other in "serviceAccount:other@$PROJECT.iam.gserviceaccount.com" \
+    "serviceAccount:tf-plan-old@$PROJECT.iam.gserviceaccount.com" "serviceAccount:x$APPLY_SA"; do
+    printf 'roles/viewer\t%s\n' "$other" >>"$S/project_iam"
+    printf 'roles/billing.viewer\t%s\n' "$other" >>"$S/billing_iam"
+  done
+  invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
+  assert_rc 0
+  assert_called "projects remove-iam-policy-binding $PROJECT --member=serviceAccount:$APPLY_SA --role=roles/run.admin --all"
+  [[ $(grep -c "remove-iam-policy-binding $PROJECT --member=serviceAccount:$APPLY_SA --role=roles/run.admin" "$LOG") -eq 1 ]] ||
+    fail "a duplicated role must be removed once, with --all"
+  assert_called "--member=deleted:serviceAccount:$PLAN_SA?uid=1234567890 --role=roles/viewer --all"
+  assert_no_row project_iam "$PLAN_SA"
+  assert_no_row project_iam "$APPLY_SA$TAB"
+  for other in "serviceAccount:other@$PROJECT.iam.gserviceaccount.com" \
+    "serviceAccount:tf-plan-old@$PROJECT.iam.gserviceaccount.com" "serviceAccount:x$APPLY_SA"; do
+    assert_row project_iam roles/viewer "$other"
+    assert_row billing_iam roles/billing.viewer "$other"
+    assert_not_called "--member=$other"
+  done
+  assert_row project_iam roles/owner user:operator@example.com
+}
+
+test_teardown_billing_removal_tolerates_only_already_removed() {
+  new_project
+  bootstrap_ok
+  # Listed, but already removed by someone else: skipped.
+  printf 'roles/logging.viewer\tserviceAccount:%s\n' "$APPLY_SA" >"$S/billing_iam_stale"
+  invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
+  assert_rc 0
+  assert_out "already removed: roles/logging.viewer -> serviceAccount:$APPLY_SA"
+  assert_no_file "buckets/$BUCKET"
+  # Any other failure stops teardown before the bucket goes.
+  new_project
+  bootstrap_ok
+  echo "billing accounts remove-iam-policy-binding" >"$S/deny"
+  invoke teardown.sh --project "$PROJECT" --skip-terraform --confirm-project "$PROJECT"
+  assert_rc 1
+  assert_out "could not remove"
   assert_not_called "storage rm"
   assert_file "buckets/$BUCKET"
 }
@@ -590,7 +825,9 @@ test_readme_contract_matches_lib_constants() {
   source "$SCRIPTS/lib.sh"
   for value in "$STATE_BUCKET_SUFFIX" "$BOOTSTRAP_LABEL_KEY=$BOOTSTRAP_LABEL_VALUE" "$WIF_LOCATION" \
     "$WIF_POOL_ID" "$WIF_PROVIDER_ID" "$WIF_ISSUER_URI" "$WIF_ATTRIBUTE_MAPPING" "$INFRA_WORKFLOW_PATH" \
-    "$PLAN_SA_ID" "$APPLY_SA_ID" ":$PLAN_TARGET" ":$APPLY_TARGET" "$WIF_USER_ROLE" "$STATE_BUCKET_ROLE" \
+    "$PLAN_SA_ID" "$APPLY_SA_ID" ":$PLAN_TARGET" ":$APPLY_TARGET" "$WIF_USER_ROLE" "$APPLY_STATE_ROLE" \
+    "$PLAN_STATE_READ_ROLE" "$PLAN_STATE_LOCK_ROLE" "$PLAN_STATE_LOCK_CONDITION_EXPRESSION" \
+    "$PLAN_STATE_LOCK_CONDITION_TITLE" \
     "$APPLY_BILLING_ROLE" "$PLAN_BILLING_ROLE" "$GH_VAR_PROJECT_ID" "$GH_VAR_PROJECT_NUMBER" \
     "$GH_VAR_REGION" "$GH_VAR_STATE_BUCKET" "$DEFAULT_REGION" \
     "${PLAN_PROJECT_ROLES[@]}" "${APPLY_PROJECT_ROLES[@]}" "${REQUIRED_APIS[@]}"; do
@@ -607,10 +844,21 @@ test_readme_contract_matches_lib_constants() {
 
 # ---- Runner ----------------------------------------------------------------------
 
+# Each test runs in its own subshell with errexit really active: the subshell is not
+# part of a condition (which would silently disable `set -e` inside it), so any failing
+# command fails the test, and the ERR trap says which one.
 passed=0
 failed=0
 for test in $(declare -F | sed -n 's/^declare -f \(test_.*\)/\1/p'); do
-  if (set -euo pipefail; "$test"); then
+  set +e
+  (
+    set -Eeuo pipefail
+    trap 'printf "    FAIL: line %s: %s exited %s\n" "$LINENO" "$BASH_COMMAND" "$?"' ERR
+    "$test"
+  )
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
     printf 'ok   %s\n' "$test"
     passed=$((passed + 1))
   else
