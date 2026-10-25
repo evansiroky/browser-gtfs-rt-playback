@@ -14,9 +14,19 @@ export function hasWebBuild(webDistDir: string): boolean {
 }
 
 /**
+ * A request for a static file rather than a client-side route: anything under `/assets/` or a
+ * top-level name with an extension (`/favicon.ico`). Client routes such as `/trips/a.b` (trip IDs
+ * may contain dots) are deeper than one segment, so they still reach the app.
+ */
+function isFileRequest(pathname: string): boolean {
+  return pathname.startsWith('/assets/') || /^\/[^/]+\.[A-Za-z0-9]+$/.test(pathname);
+}
+
+/**
  * Serves the built web app from `webDistDir` (files that exist at startup), with an SPA fallback:
- * any other `GET` outside `/api` answers with `index.html` so client-side routes load. `/api/*`
- * never falls through to the app; it answers with the `not_found` envelope.
+ * any other `GET`/`HEAD` outside `/api` answers with `index.html` so client-side routes load,
+ * except a missing static file, which is a plain 404 (a stale page must never receive HTML for a
+ * script). `/api/*` never falls through to the app; it answers with the `not_found` envelope.
  */
 export async function registerWebApp(
   app: FastifyInstance,
@@ -37,8 +47,17 @@ export async function registerWebApp(
   }
 
   app.setNotFoundHandler((request: FastifyRequest, reply: FastifyReply) => {
-    if (webDistDir && request.method === 'GET' && !isApiPath(request.url)) {
-      return reply.header('cache-control', 'no-cache').sendFile('index.html');
+    const pathname = request.url.split('?', 1)[0] ?? '';
+    const read = request.method === 'GET' || request.method === 'HEAD';
+    if (webDistDir && read && !isApiPath(pathname)) {
+      if (isFileRequest(pathname)) {
+        return reply
+          .code(404)
+          .type('text/plain; charset=utf-8')
+          .header('cache-control', 'no-store')
+          .send('Not found');
+      }
+      return reply.sendFile('index.html');
     }
     return reply
       .code(404)

@@ -19,7 +19,7 @@ async function setup(webDistDir: string) {
 describe('static web app', () => {
   it('serves index.html at / and for client routes (SPA fallback)', async () => {
     await setup(WEB_BUILD);
-    for (const url of ['/', '/trips/abc', '/trips/a%2Fb?x=1']) {
+    for (const url of ['/', '/trips/abc', '/trips/a%2Fb?x=1', '/trips/route.7.trip.v2']) {
       const res = await app!.inject({ url });
       expect(res.statusCode, url).toBe(200);
       expect(res.headers['content-type']).toMatch(/^text\/html/);
@@ -31,12 +31,36 @@ describe('static web app', () => {
     }
   });
 
-  it('serves built assets as immutable files', async () => {
+  it('serves built assets as immutable files and index.html as no-cache', async () => {
     await setup(WEB_BUILD);
     const res = await app!.inject({ url: '/assets/app-1234.css' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/^text\/css/);
     expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    const index = await app!.inject({ url: '/index.html' });
+    expect(index.statusCode).toBe(200);
+    expect(index.headers['cache-control']).toBe('no-cache');
+  });
+
+  it('answers a missing static file with a plain 404, never index.html', async () => {
+    await setup(WEB_BUILD);
+    for (const url of ['/assets/app-OLDHASH.js', '/assets/sub/x', '/favicon.ico', '/robots.txt']) {
+      const res = await app!.inject({ url });
+      expect(res.statusCode, url).toBe(404);
+      expect(res.headers['content-type']).toBe('text/plain; charset=utf-8');
+      expect(res.body).not.toContain('fixture app');
+      expect(res.headers['content-security-policy']).toContain("default-src 'self'");
+    }
+  });
+
+  it('answers HEAD on client routes like GET, without a body', async () => {
+    await setup(WEB_BUILD);
+    const get = await app!.inject({ url: '/trips/abc' });
+    const head = await app!.inject({ method: 'HEAD', url: '/trips/abc' });
+    expect(head.statusCode).toBe(200);
+    expect(head.headers['content-type']).toBe(get.headers['content-type']);
+    expect(head.headers['cache-control']).toBe('no-cache');
+    expect(head.body).toBe('');
   });
 
   it('never falls through to the app for /api paths or non-GET requests', async () => {
