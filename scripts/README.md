@@ -11,16 +11,16 @@ only `gcloud` (plus `terraform` for teardown's destroy step), take every input a
 with an environment-variable fallback, print each change before making it, and support
 `--dry-run`. Run either with `--help` for the full flag list.
 
-| Flag | Env fallback | Default | Used by |
-|---|---|---|---|
-| `--project <project-id>` | `PROJECT_ID` | none (required) | both |
-| `--repo <owner/repo>` | `GITHUB_REPO` | none (required; for teardown only when Terraform runs) | both |
-| `--region <region>` | `REGION` | `us-west1` | both |
-| `--dry-run` | | off | both |
-| `--confirm-project <project-id>` | | prompt on stdin | teardown |
-| `--skip-terraform` | | off | teardown |
-| `--delete-project` | | off | teardown |
-| `--confirm-delete-project <project-id>` | | prompt on stdin | teardown |
+| Flag                                    | Env fallback  | Default                                                | Used by  |
+| --------------------------------------- | ------------- | ------------------------------------------------------ | -------- |
+| `--project <project-id>`                | `PROJECT_ID`  | none (required)                                        | both     |
+| `--repo <owner/repo>`                   | `GITHUB_REPO` | none (required; for teardown only when Terraform runs) | both     |
+| `--region <region>`                     | `REGION`      | `us-west1`                                             | both     |
+| `--dry-run`                             |               | off                                                    | both     |
+| `--confirm-project <project-id>`        |               | prompt on stdin                                        | teardown |
+| `--skip-terraform`                      |               | off                                                    | teardown |
+| `--delete-project`                      |               | off                                                    | teardown |
+| `--confirm-delete-project <project-id>` |               | prompt on stdin                                        | teardown |
 
 Flags win over environment variables. `--repo` must be the full `owner/repo` with the exact
 case GitHub uses, because the Workload Identity provider compares it verbatim.
@@ -106,6 +106,7 @@ The escape hatch, and the way to remove the app entirely. In order, it:
    soft-delete for 30 days; bootstrap undeletes them). Last, it deletes the state bucket with
    every object version, **only if the bucket carries the bootstrap label**. A bucket without
    the label is left untouched, with a warning.
+
 4. With `--delete-project`, asks for the project ID a second time (or
    `--confirm-delete-project`), then shuts down the whole project as the last step.
    Without it, the project and its billing link are left alone.
@@ -124,27 +125,27 @@ are the constants in [`lib.sh`](lib.sh); `scripts/test/run-tests.sh` fails if th
 and `lib.sh` disagree. In this table, `<owner>/<repo>` is `--repo` and `<project-number>`
 is the project's number.
 
-| Thing | Value |
-|---|---|
-| State bucket | `<project-id>-tfstate`: versioned, uniform bucket-level access, public access prevention, label `gtfs-rt-debugger-bootstrap=true`, location `--region`. Labeled only when bootstrap creates it or finds it empty; a non-empty unlabeled bucket is refused |
-| Terraform state prefix | set by `infra/`'s backend block, not by bootstrap |
-| WIF pool | `github`, location `global`: `projects/<project-number>/locations/global/workloadIdentityPools/github` |
-| WIF provider | `github` (OIDC, issuer `https://token.actions.githubusercontent.com`, default audience): `projects/<project-number>/locations/global/workloadIdentityPools/github/providers/github` |
-| Provider attribute mapping | `google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.target=assertion.job_workflow_ref.split('@')[0] + ':' + (assertion.event_name == 'pull_request' ? 'pr' : assertion.ref)` |
-| Provider attribute condition | `assertion.repository == '<owner>/<repo>'` (an existing provider with any other condition, mapping or issuer is refused) |
-| Infrastructure workflow | `.github/workflows/infra.yml` |
-| Plan identity | `tf-plan@<project-id>.iam.gserviceaccount.com` (service account `tf-plan`) |
-| Plan member (`roles/iam.workloadIdentityUser` on `tf-plan`) | `principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.target/<owner>/<repo>/.github/workflows/infra.yml:pr` |
-| Plan roles, project | `roles/viewer`, `roles/iam.securityReviewer` |
-| Plan roles, state bucket only | `roles/storage.objectViewer` (read state), plus `roles/storage.objectUser` with the IAM condition `resource.name.endsWith(".tflock")` (title `terraform-lock-objects`): its only write access is to Terraform lock objects |
-| Plan roles, billing account | `roles/billing.viewer` (lets `terraform plan` read the budget; see below), if the operator can grant it |
-| Apply identity | `tf-apply@<project-id>.iam.gserviceaccount.com` (service account `tf-apply`) |
-| Apply member (`roles/iam.workloadIdentityUser` on `tf-apply`) | `principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.target/<owner>/<repo>/.github/workflows/infra.yml:refs/heads/main` |
-| Apply roles, project | `roles/run.admin`, `roles/artifactregistry.admin`, `roles/secretmanager.admin`, `roles/iam.serviceAccountAdmin`, `roles/iam.serviceAccountUser`, `roles/serviceusage.serviceUsageConsumer` |
-| Apply roles, state bucket only | `roles/storage.objectAdmin` |
-| Apply roles, billing account | `roles/billing.costsManager` (manage the budget), if the operator can grant it; otherwise bootstrap prints the command |
-| Enabled APIs | `run.googleapis.com`, `artifactregistry.googleapis.com`, `secretmanager.googleapis.com`, `iam.googleapis.com`, `iamcredentials.googleapis.com`, `sts.googleapis.com`, `cloudresourcemanager.googleapis.com`, `serviceusage.googleapis.com`, `billingbudgets.googleapis.com`, `storage.googleapis.com` |
-| Default region | `us-west1` |
+| Thing                                                         | Value                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State bucket                                                  | `<project-id>-tfstate`: versioned, uniform bucket-level access, public access prevention, label `gtfs-rt-debugger-bootstrap=true`, location `--region`. Labeled only when bootstrap creates it or finds it empty; a non-empty unlabeled bucket is refused                                             |
+| Terraform state prefix                                        | set by `infra/`'s backend block, not by bootstrap                                                                                                                                                                                                                                                     |
+| WIF pool                                                      | `github`, location `global`: `projects/<project-number>/locations/global/workloadIdentityPools/github`                                                                                                                                                                                                |
+| WIF provider                                                  | `github` (OIDC, issuer `https://token.actions.githubusercontent.com`, default audience): `projects/<project-number>/locations/global/workloadIdentityPools/github/providers/github`                                                                                                                   |
+| Provider attribute mapping                                    | `google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.target=assertion.job_workflow_ref.split('@')[0] + ':' + (assertion.event_name == 'pull_request' ? 'pr' : assertion.ref)`                                                                                            |
+| Provider attribute condition                                  | `assertion.repository == '<owner>/<repo>'` (an existing provider with any other condition, mapping or issuer is refused)                                                                                                                                                                              |
+| Infrastructure workflow                                       | `.github/workflows/infra.yml`                                                                                                                                                                                                                                                                         |
+| Plan identity                                                 | `tf-plan@<project-id>.iam.gserviceaccount.com` (service account `tf-plan`)                                                                                                                                                                                                                            |
+| Plan member (`roles/iam.workloadIdentityUser` on `tf-plan`)   | `principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.target/<owner>/<repo>/.github/workflows/infra.yml:pr`                                                                                                                            |
+| Plan roles, project                                           | `roles/viewer`, `roles/iam.securityReviewer`                                                                                                                                                                                                                                                          |
+| Plan roles, state bucket only                                 | `roles/storage.objectViewer` (read state), plus `roles/storage.objectUser` with the IAM condition `resource.name.endsWith(".tflock")` (title `terraform-lock-objects`): its only write access is to Terraform lock objects                                                                            |
+| Plan roles, billing account                                   | `roles/billing.viewer` (lets `terraform plan` read the budget; see below), if the operator can grant it                                                                                                                                                                                               |
+| Apply identity                                                | `tf-apply@<project-id>.iam.gserviceaccount.com` (service account `tf-apply`)                                                                                                                                                                                                                          |
+| Apply member (`roles/iam.workloadIdentityUser` on `tf-apply`) | `principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/github/attribute.target/<owner>/<repo>/.github/workflows/infra.yml:refs/heads/main`                                                                                                               |
+| Apply roles, project                                          | `roles/run.admin`, `roles/artifactregistry.admin`, `roles/secretmanager.admin`, `roles/iam.serviceAccountAdmin`, `roles/iam.serviceAccountUser`, `roles/serviceusage.serviceUsageConsumer`                                                                                                            |
+| Apply roles, state bucket only                                | `roles/storage.objectAdmin`                                                                                                                                                                                                                                                                           |
+| Apply roles, billing account                                  | `roles/billing.costsManager` (manage the budget), if the operator can grant it; otherwise bootstrap prints the command                                                                                                                                                                                |
+| Enabled APIs                                                  | `run.googleapis.com`, `artifactregistry.googleapis.com`, `secretmanager.googleapis.com`, `iam.googleapis.com`, `iamcredentials.googleapis.com`, `sts.googleapis.com`, `cloudresourcemanager.googleapis.com`, `serviceusage.googleapis.com`, `billingbudgets.googleapis.com`, `storage.googleapis.com` |
+| Default region                                                | `us-west1`                                                                                                                                                                                                                                                                                            |
 
 The `attribute.target` attribute is `<owner>/<repo>/<workflow path>:<target>`, where
 `<target>` is `pr` for `pull_request` events and the Git ref otherwise. So `tf-plan` can be
@@ -177,12 +178,12 @@ member strings.
 
 Bootstrap prints these, with `gh variable set` commands. No GitHub secrets are used.
 
-| Variable | Value |
-|---|---|
-| `GCP_PROJECT_ID` | the project ID |
+| Variable             | Value                                                             |
+| -------------------- | ----------------------------------------------------------------- |
+| `GCP_PROJECT_ID`     | the project ID                                                    |
 | `GCP_PROJECT_NUMBER` | the project number (to build the Workload Identity provider path) |
-| `GCP_REGION` | `--region` |
-| `TF_STATE_BUCKET` | `<project-id>-tfstate` |
+| `GCP_REGION`         | `--region`                                                        |
+| `TF_STATE_BUCKET`    | `<project-id>-tfstate`                                            |
 
 ### Adding a role to tf-apply
 
