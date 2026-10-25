@@ -40,8 +40,9 @@ Requires Node 22 (see `.nvmrc`) and npm 10.
 npm ci                # install all workspaces
 npm run lint          # ESLint (flat config, typescript-eslint)
 npm run typecheck     # tsc for every package; builds shared first so dependents see its output
-npm test              # Vitest for every package
+npm test              # Vitest for every package (shared is built first)
 npm run build         # production build of every package, in workspace order
+npm run clean         # remove build output from every package
 npm run format        # Prettier, write
 npm run format:check  # Prettier, check only
 ```
@@ -49,6 +50,8 @@ npm run format:check  # Prettier, check only
 Each root script runs the same-named script in every workspace (`--workspaces --if-present`), in
 the `workspaces` order, so a package only needs to define the scripts that apply to it.
 
-`shared` is consumed through its built output (`shared/dist`), which `npm run typecheck` and
-`npm run build` produce. After changing `shared`, run `npm run build -w shared` before running
-another package's tests on their own.
+`shared` is consumed through its built output (`shared/dist`). Its `typecheck`, `test` and `build`
+scripts all run `tsc -b` first, and it is first in the `workspaces` order, so by the time any other
+package's scripts run, `shared` is built. Every package's tests and typecheck may rely on that.
+After changing `shared`, run `npm run build -w shared` before running another package's scripts on
+their own.
