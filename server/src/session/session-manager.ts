@@ -3,7 +3,13 @@ import type { FastifyBaseLogger } from 'fastify';
 import { toEpochSeconds, type Clock, type Timer } from '../clock.js';
 import type { FeedPoller } from '../realtime/feed-poller.js';
 import type { FeedKind, SnapshotStore } from '../realtime/snapshot-store.js';
-import type { ScheduleProvider } from './schedule-provider.js';
+import { runHook } from '../hooks.js';
+import type { ScheduleProvider, ScheduleStatus } from './schedule-provider.js';
+
+const SCHEDULE_FAULT = {
+  code: 'internal_error',
+  message: 'The schedule could not be loaded because of an internal error.',
+};
 
 export interface SessionManagerOptions {
   clock: Clock;
@@ -42,6 +48,8 @@ export class SessionManager {
   #idleTimer: Timer | null = null;
   #maxTimer: Timer | null = null;
   #shutDown = false;
+  /** A schedule provider call threw during this activation. */
+  #scheduleFault = false;
 
   constructor(options: SessionManagerOptions) {
     this.#options = options;
@@ -56,7 +64,7 @@ export class SessionManager {
     this.#resetIdleTimer();
     if (this.#shutDown) return this.status();
     if (!this.active) this.#wake();
-    else if (this.#options.schedule.status().state === 'failed') this.#options.schedule.retry();
+    else if (this.scheduleStatus().state === 'failed') this.#callSchedule('retry');
     return this.status();
   }
 
@@ -66,8 +74,28 @@ export class SessionManager {
     return this.status();
   }
 
+  /**
+   * The schedule block of the status: `idle` while dormant, otherwise the provider's report, or
+   * `failed` with a generic `internal_error` when a provider call threw.
+   */
+  scheduleStatus(): ScheduleStatus {
+    if (!this.active) return { state: 'idle', loadedAt: null, error: null };
+    if (!this.#scheduleFault) {
+      let status: ScheduleStatus | undefined;
+      if (
+        runHook(this.#options.logger, 'schedule.status', () => {
+          status = this.#options.schedule.status();
+        }) &&
+        status
+      ) {
+        return status;
+      }
+    }
+    return { state: 'failed', loadedAt: null, error: SCHEDULE_FAULT };
+  }
+
   status(): SessionStatus {
-    const { maxActivationMs, schedule, store, pollers } = this.#options;
+    const { maxActivationMs, store, pollers } = this.#options;
     if (this.#activatedAt === null) {
       return {
         state: 'dormant',
@@ -75,7 +103,7 @@ export class SessionManager {
         activatedAt: null,
         expiresAt: null,
         historyStartsAt: null,
-        schedule: { state: 'idle', loadedAt: null, error: null },
+        schedule: this.scheduleStatus(),
         realtime: { vehiclePositions: null, tripUpdates: null },
       };
     }
@@ -87,7 +115,7 @@ export class SessionManager {
       activatedAt: toEpochSeconds(this.#activatedAt),
       expiresAt: toEpochSeconds(this.#activatedAt + maxActivationMs),
       historyStartsAt: historyStartsAt === null ? null : toEpochSeconds(historyStartsAt),
-      schedule: schedule.status(),
+      schedule: this.scheduleStatus(),
       realtime: {
         vehiclePositions: feedStatus('vehiclePositions'),
         tripUpdates: feedStatus('tripUpdates'),
@@ -103,26 +131,40 @@ export class SessionManager {
     if (this.active) this.#end(null);
   }
 
+  /**
+   * The activation's state is set before any hook runs, and the pollers start independently of
+   * the schedule provider, so a throwing provider leaves a consistent activation whose schedule
+   * reports `failed`.
+   */
   #wake(): void {
-    const { clock, logger, maxActivationMs, schedule, pollers } = this.#options;
+    const { clock, logger, maxActivationMs, pollers } = this.#options;
     this.#activatedAt = clock.now();
     this.#endedReason = null;
+    this.#scheduleFault = false;
     this.#maxTimer = clock.setTimeout(() => this.#end('max-duration'), maxActivationMs);
-    schedule.start();
     for (const poller of pollers) poller.start();
+    this.#callSchedule('start');
     logger.info('session activated');
   }
 
+  /** The state is dormant before any hook runs; each hook's failure is contained. */
   #end(reason: EndedReason | null): void {
-    const { clock, logger, schedule, store, pollers } = this.#options;
+    const { clock, logger, store, pollers } = this.#options;
     if (this.#maxTimer) clock.clearTimeout(this.#maxTimer);
     this.#maxTimer = null;
-    for (const poller of pollers) poller.stop();
-    schedule.discard();
-    store.clear();
     this.#activatedAt = null;
     this.#endedReason = reason;
+    for (const poller of pollers) poller.stop();
+    this.#callSchedule('discard');
+    this.#scheduleFault = false;
+    store.clear();
     if (reason) logger.info({ reason }, 'session ended');
+  }
+
+  #callSchedule(method: 'start' | 'retry' | 'discard'): void {
+    const { logger, schedule } = this.#options;
+    const completed = runHook(logger, `schedule.${method}`, () => schedule[method]());
+    if (method !== 'discard') this.#scheduleFault = !completed;
   }
 
   #resetIdleTimer(): void {

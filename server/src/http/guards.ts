@@ -1,5 +1,4 @@
 import type { FastifyRequest } from 'fastify';
-import type { ScheduleProvider } from '../session/schedule-provider.js';
 import type { SessionManager } from '../session/session-manager.js';
 import { ApiError } from './errors.js';
 
@@ -17,10 +16,7 @@ export interface DataEndpointGuard {
   readonly requireSchedule: ApiHook;
 }
 
-export function createDataEndpointGuard(
-  session: SessionManager,
-  schedule: ScheduleProvider,
-): DataEndpointGuard {
+export function createDataEndpointGuard(session: SessionManager): DataEndpointGuard {
   const requireActive: ApiHook = async () => {
     if (!session.active) {
       throw new ApiError(
@@ -32,7 +28,7 @@ export function createDataEndpointGuard(
   };
   const requireSchedule: ApiHook = async (request) => {
     await requireActive(request);
-    const { state } = schedule.status();
+    const { state } = session.scheduleStatus();
     if (state !== 'ready') {
       throw new ApiError(
         409,

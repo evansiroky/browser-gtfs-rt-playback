@@ -11,8 +11,12 @@ import { RateLimiter } from './rate-limit.js';
 
 export const API_PREFIX = '/api/v1';
 
-/** Everything an API route plugin may use. */
-export interface ServerContext {
+/**
+ * Everything an `init` hook or API route plugin may use. `services` is whatever the app's
+ * `services` factory built (the schedule loader's query API, the trip engine, ...), fully typed.
+ */
+export interface ServerContext<S = undefined> {
+  readonly services: S;
   readonly config: Config;
   readonly clock: Clock;
   readonly logger: FastifyBaseLogger;
@@ -28,9 +32,12 @@ export interface ServerContext {
  * envelope for thrown {@link ApiError}s and unexpected errors, and a `not_found` envelope for
  * unknown paths. Each route adds its own `rejectUnknownQuery([...])` and guard preHandlers.
  */
-export type ApiRoutes = (api: FastifyInstance, context: ServerContext) => void | Promise<void>;
+export type ApiRoutes<S = undefined> = (
+  api: FastifyInstance,
+  context: ServerContext<S>,
+) => void | Promise<void>;
 
-export function apiPlugin(context: ServerContext, routes: readonly ApiRoutes[]) {
+export function apiPlugin<S>(context: ServerContext<S>, routes: readonly ApiRoutes<S>[]) {
   return async (api: FastifyInstance) => {
     const limiter = new RateLimiter(context.clock, context.config.rateLimitPerMinute);
 
@@ -53,7 +60,7 @@ export function apiPlugin(context: ServerContext, routes: readonly ApiRoutes[]) 
   };
 }
 
-const sessionRoutes: ApiRoutes = (api, { session }) => {
+const sessionRoutes = (api: FastifyInstance, { session }: ServerContext<unknown>) => {
   const noQuery = rejectUnknownQuery([]);
   api.post('/session/start', { preHandler: noQuery }, async (): Promise<SessionStatus> =>
     session.start(),

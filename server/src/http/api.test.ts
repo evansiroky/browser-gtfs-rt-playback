@@ -254,16 +254,82 @@ describe('API conventions', () => {
     expect(logged).not.toContain('rt.example.test/vp');
   });
 
-  it('sets the CSP and security headers on API responses', async () => {
-    await setup({ TILE_HOST: 'https://tiles.example.test' });
+  it('sets the exact CSP, allowing the default map tile host, and security headers', async () => {
+    await setup();
     const res = await post('/session/ping');
-    const csp = String(res.headers['content-security-policy']);
-    expect(csp).toContain("default-src 'self'");
-    expect(csp).toContain("connect-src 'self' https://tiles.example.test");
-    expect(csp).toContain('worker-src blob:');
-    expect(csp).toContain("img-src 'self' data: blob: https://tiles.example.test");
-    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(res.headers['content-security-policy']).toBe(
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob: https://tiles.openfreemap.org",
+        "font-src 'self'",
+        "connect-src 'self' https://tiles.openfreemap.org",
+        'worker-src blob:',
+        'child-src blob:',
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+      ].join('; '),
+    );
     expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['referrer-policy']).toBe('no-referrer');
+  });
+
+  it('uses a configured tile host instead of the default', async () => {
+    await setup({ TILE_HOST: 'https://tiles.example.test/' });
+    const csp = String((await post('/session/ping')).headers['content-security-policy']);
+    expect(csp).toContain("connect-src 'self' https://tiles.example.test;");
+    expect(csp).toContain("img-src 'self' data: blob: https://tiles.example.test;");
+    expect(csp).not.toContain('openfreemap');
+  });
+
+  it('answers router failures with the envelope, no-store and security headers', async () => {
+    await setup();
+    for (const url of ['/api/v1/session/%zz', '/api/v1/%E0%A4%A']) {
+      const res = await app!.inject({ url });
+      expectError(res, 400, 'bad_request');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['content-security-policy']).toContain("default-src 'self'");
+    }
+  });
+
+  it('accepts route parameters of up to 1000 characters', async () => {
+    await setup(
+      {},
+      {
+        routes: [
+          (api) => {
+            api.get('/echo/:id', async (request) => ({
+              id: (request.params as { id: string }).id,
+            }));
+          },
+        ],
+      },
+    );
+    const long = 'x'.repeat(500);
+    const res = await app!.inject({ url: `/api/v1/echo/${long}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ id: long });
+    const tooLong = await app!.inject({ url: `/api/v1/echo/${'x'.repeat(1001)}` });
+    expectError(tooLong, 400, 'bad_request');
+    expect(tooLong.headers['cache-control']).toBe('no-store');
+  });
+
+  it('answers requests that arrive while closing normally, in the envelope conventions', async () => {
+    await setup();
+    const closing = app!.close();
+    const [ping, missing] = await Promise.all([
+      app!.inject({ method: 'POST', url: '/api/v1/session/ping' }),
+      app!.inject({ url: '/api/v1/nope' }),
+    ]);
+    await closing;
+    app = undefined;
+    expect(ping.statusCode).toBe(200);
+    expect(ping.json<SessionStatus>().state).toBe('dormant');
+    expect(ping.headers['cache-control']).toBe('no-store');
+    expectError(missing, 404, 'not_found');
   });
 });
 

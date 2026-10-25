@@ -1,16 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { FakeClock } from '../clock.js';
 import { encodeFeed } from '../test-support/feeds.js';
+import { captureLogger } from '../test-support/logger.js';
 import { decodeFeed, SnapshotStore, type FeedKind, type Snapshot } from './snapshot-store.js';
 
 const MINUTE = 60_000;
 
 function setup({ retentionMs = 60 * MINUTE, memoryLimitBytes = 1_000_000 } = {}) {
   const clock = new FakeClock();
-  const store = new SnapshotStore({ clock, retentionMs, memoryLimitBytes });
+  const logs: string[] = [];
+  const store = new SnapshotStore({
+    clock,
+    logger: captureLogger(logs),
+    retentionMs,
+    memoryLimitBytes,
+  });
   const add = (feed: FeedKind, bytes = encodeFeed()) => store.add(feed, bytes, decodeFeed(bytes));
-  return { clock, store, add };
+  return { clock, store, add, logs };
 }
+
+const message = decodeFeed(encodeFeed());
+const failing = () => {
+  throw new Error('downstream bug');
+};
 
 describe('SnapshotStore', () => {
   it('keeps snapshots per feed in time order with receive time and header timestamp', () => {
@@ -98,5 +110,54 @@ describe('SnapshotStore', () => {
     expect(store.all('tripUpdates')).toEqual([]);
     expect(store.historyStartsAt()).toBeNull();
     expect(store.retainedBytes()).toBe(0);
+  });
+
+  it("never evicts a feed's latest snapshot for memory, even when it is the oldest", () => {
+    // The smallest limit the configuration allows for 100-byte responses: 2 x 100.
+    const { clock, store } = setup({ memoryLimitBytes: 200 });
+    const onlyVp = store.add('vehiclePositions', new Uint8Array(100), message);
+    clock.advance(10_000);
+    store.add('tripUpdates', new Uint8Array(60), message);
+    clock.advance(10_000);
+    const latestTu = store.add('tripUpdates', new Uint8Array(60), message);
+    expect(store.latest('vehiclePositions')).toBe(onlyVp);
+    expect(store.all('tripUpdates')).toEqual([latestTu]);
+    expect(store.retainedBytes()).toBeLessThanOrEqual(200);
+  });
+
+  it('isolates throwing listeners: limits still hold and later listeners still run', () => {
+    const { clock, store, logs } = setup({ memoryLimitBytes: 200 });
+    const seen: string[] = [];
+    store.onSnapshot(failing);
+    store.onSnapshot((snapshot) => seen.push(`snapshot:${snapshot.bytes.byteLength}`));
+    store.onEvict(failing);
+    store.onEvict((_snapshot, reason) => seen.push(`evict:${reason}`));
+    for (let i = 0; i < 5; i++) {
+      expect(() => store.add('tripUpdates', new Uint8Array(100), message)).not.toThrow();
+      clock.advance(1_000);
+    }
+    expect(store.retainedBytes()).toBeLessThanOrEqual(200);
+    expect(seen.filter((entry) => entry.startsWith('snapshot'))).toHaveLength(5);
+    expect(seen.filter((entry) => entry === 'evict:memory')).toHaveLength(3);
+    expect(logs.join('\n')).toContain('extension hook failed');
+  });
+
+  it('announces a snapshot only after pruning, so listeners see a store within its limits', () => {
+    const { store } = setup({ memoryLimitBytes: 200 });
+    const retained: number[] = [];
+    store.onSnapshot(() => retained.push(store.retainedBytes()));
+    for (let i = 0; i < 4; i++) store.add('tripUpdates', new Uint8Array(100), message);
+    expect(Math.max(...retained)).toBeLessThanOrEqual(200);
+  });
+
+  it('clears everything even when a clear listener throws', () => {
+    const { store, add } = setup();
+    let later = 0;
+    store.onClear(failing);
+    store.onClear(() => later++);
+    add('vehiclePositions');
+    expect(() => store.clear()).not.toThrow();
+    expect(store.latest('vehiclePositions')).toBeNull();
+    expect(later).toBe(1);
   });
 });

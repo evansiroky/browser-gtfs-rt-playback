@@ -45,8 +45,11 @@ function setup({
   pollers,
 }: { exitOnIdle?: boolean; pollers?: PollerFactory } = {}) {
   const clock = new FakeClock();
+  const logs: string[] = [];
+  const logger = captureLogger(logs);
   const store = new SnapshotStore({
     clock,
+    logger,
     retentionMs: 60 * MINUTE,
     memoryLimitBytes: 10_000_000,
   });
@@ -54,7 +57,7 @@ function setup({
   const onIdleExit = vi.fn();
   const session = new SessionManager({
     clock,
-    logger: captureLogger([]),
+    logger,
     idleTimeoutMs: IDLE,
     maxActivationMs: MAX,
     exitOnIdle,
@@ -70,7 +73,7 @@ function setup({
       session.ping();
     }
   };
-  return { clock, store, schedule, session, onIdleExit, pingFor };
+  return { clock, store, schedule, session, onIdleExit, pingFor, logs };
 }
 
 const dormant = (endedReason: SessionStatus['endedReason']): SessionStatus => ({
@@ -277,5 +280,141 @@ describe('SessionManager', () => {
     const requests = feedHost.requests.length;
     await clock.advanceAsync(5 * MINUTE);
     expect(feedHost.requests).toHaveLength(requests);
+  });
+
+  describe('failing extension hooks', () => {
+    const fault = { code: 'internal_error', message: expect.any(String) };
+    const boom = () => {
+      throw new Error('downstream bug');
+    };
+
+    it('a throwing onClear listener still ends the activation and forgets everything', () => {
+      const { session, schedule, store, logs, pingFor } = setup();
+      store.onClear(boom);
+      session.start();
+      store.add('vehiclePositions', encodeFeed(), decodeFeed(encodeFeed()));
+      expect(() => pingFor(MAX)).not.toThrow();
+      expect(session.status()).toEqual(dormant('max-duration'));
+      expect(store.latest('vehiclePositions')).toBeNull();
+      expect(schedule.calls).toEqual(['start', 'discard']);
+      expect(logs.join('\n')).toContain('onClear');
+    });
+
+    it('a throwing discard still ends the activation and clears the store', () => {
+      const { clock, session, schedule, store } = setup();
+      schedule.discard = boom;
+      session.start();
+      store.add('tripUpdates', encodeFeed(), decodeFeed(encodeFeed()));
+      expect(() => clock.advance(IDLE)).not.toThrow();
+      expect(session.status()).toEqual(dormant('idle'));
+      expect(store.latest('tripUpdates')).toBeNull();
+      expect(clock.pendingTimers()).toBe(0);
+    });
+
+    it('a throwing start gives a consistent activation whose schedule reports failed', async () => {
+      host = await startFeedHost();
+      const feedHost = host;
+      feedHost.route('/vp', serveBytes(encodeFeed()));
+      const { session, schedule, logs } = setup({
+        pollers: (store, clock) => [
+          new FeedPoller({
+            feed: 'vehiclePositions',
+            url: feedHost.url('/vp'),
+            clock,
+            store,
+            logger: captureLogger([]),
+            intervalMs: 10 * SECOND,
+            timeoutMs: 8 * SECOND,
+            maxBytes: 1_000_000,
+          }),
+        ],
+      });
+      schedule.start = boom;
+      let status: SessionStatus | undefined;
+      expect(() => (status = session.start())).not.toThrow();
+      expect(status).toMatchObject({
+        state: 'active',
+        schedule: { state: 'failed', error: fault },
+      });
+      await vi.waitFor(() => expect(feedHost.requests).toHaveLength(1));
+      expect(logs.join('\n')).toContain('schedule.start');
+
+      // A later start retries; once the provider behaves, its own status is reported again.
+      session.start();
+      expect(schedule.calls).toEqual(['retry']);
+      expect(session.status().schedule).toEqual({ state: 'idle', loadedAt: null, error: null });
+    });
+
+    it('a throwing status() reads as failed instead of breaking the status response', () => {
+      const { session, schedule } = setup();
+      session.start();
+      schedule.status = () => {
+        throw new Error('downstream bug');
+      };
+      expect(session.status().schedule).toEqual({ state: 'failed', loadedAt: null, error: fault });
+      expect(session.scheduleStatus().state).toBe('failed');
+    });
+  });
+
+  it('repeated wake and sleep cycles leave only the inactivity timer behind', async () => {
+    host = await startFeedHost();
+    const feedHost = host;
+    feedHost.route('/vp', serveBytes(encodeFeed()));
+    const { clock, session, pingFor } = setup({
+      pollers: (store, clock) => [
+        new FeedPoller({
+          feed: 'vehiclePositions',
+          url: feedHost.url('/vp'),
+          clock,
+          store,
+          logger: captureLogger([]),
+          intervalMs: 10 * SECOND,
+          timeoutMs: 8 * SECOND,
+          maxBytes: 1_000_000,
+        }),
+      ],
+    });
+    for (let i = 0; i < 20; i++) {
+      session.start();
+      pingFor(MAX); // ends by max-duration
+      await settle();
+    }
+    expect(session.status().endedReason).toBe('max-duration');
+    expect(clock.pendingTimers()).toBe(1);
+  });
+
+  it('a response that arrives after dormancy never lands in the next activation', async () => {
+    host = await startFeedHost();
+    const feedHost = host;
+    let release: (() => void) | undefined;
+    let requests = 0;
+    feedHost.route('/vp', (_req, res) => {
+      requests++;
+      const body = encodeFeed({ timestamp: requests === 1 ? 111 : 222 });
+      if (requests === 1) release = () => res.writeHead(200).end(body);
+      else res.writeHead(200).end(body);
+    });
+    const { clock, session, store } = setup({
+      pollers: (store, clock) => [
+        new FeedPoller({
+          feed: 'vehiclePositions',
+          url: feedHost.url('/vp'),
+          clock,
+          store,
+          logger: captureLogger([]),
+          intervalMs: 10 * SECOND,
+          timeoutMs: 20 * MINUTE,
+          maxBytes: 1_000_000,
+        }),
+      ],
+    });
+    session.start();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    clock.advance(IDLE);
+    session.start();
+    await vi.waitFor(() => expect(store.latest('vehiclePositions')?.feedTimestamp).toBe(222));
+    release?.();
+    await settle();
+    expect(store.all('vehiclePositions').map((snapshot) => snapshot.feedTimestamp)).toEqual([222]);
   });
 });

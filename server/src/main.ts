@@ -1,5 +1,6 @@
 import { buildApp } from './app.js';
 import { ConfigError, loadConfig } from './config.js';
+import { closeThenExit, installCrashPolicy } from './shutdown.js';
 
 let config;
 try {
@@ -11,16 +12,14 @@ try {
 }
 
 const { app } = await buildApp({ config, exit: () => process.exit(0) });
+installCrashPolicy(process, app.log, (code) => process.exit(code));
 
 let closing = false;
 const shutdown = (signal: string) => {
   if (closing) return;
   closing = true;
   app.log.info({ signal }, 'shutting down');
-  app.close().then(
-    () => process.exit(0),
-    () => process.exit(1),
-  );
+  closeThenExit(app, () => process.exit(0));
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));

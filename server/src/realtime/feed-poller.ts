@@ -91,9 +91,13 @@ export class FeedPoller {
     if (this.#inFlight) return;
     const controller = new AbortController();
     this.#inFlight = controller;
-    void this.#poll(controller).finally(() => {
-      if (this.#inFlight === controller) this.#inFlight = null;
-    });
+    this.#poll(controller)
+      .catch((error: unknown) => {
+        this.#options.logger.error({ err: error, feed: this.feed }, 'realtime poll failed');
+      })
+      .finally(() => {
+        if (this.#inFlight === controller) this.#inFlight = null;
+      });
   }
 
   async #poll(controller: AbortController): Promise<void> {

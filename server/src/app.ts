@@ -1,8 +1,14 @@
-import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance } from 'fastify';
+import Fastify, {
+  LogController,
+  type FastifyBaseLogger,
+  type FastifyError,
+  type FastifyInstance,
+  type FastifyReply,
+} from 'fastify';
 import { systemClock, type Clock } from './clock.js';
 import { secretFragments, type Config } from './config.js';
 import { apiPlugin, API_PREFIX, type ApiRoutes, type ServerContext } from './http/api.js';
-import { handleApiError } from './http/errors.js';
+import { errorBody, handleApiError } from './http/errors.js';
 import { createDataEndpointGuard } from './http/guards.js';
 import { securityHeaders } from './http/security-headers.js';
 import { hasWebBuild, registerWebApp } from './http/static.js';
@@ -11,37 +17,56 @@ import { FeedPoller } from './realtime/feed-poller.js';
 import { FEED_KINDS, SnapshotStore } from './realtime/snapshot-store.js';
 import { noopScheduleProvider, type ScheduleProvider } from './session/schedule-provider.js';
 import { SessionManager } from './session/session-manager.js';
+import { closeThenExit } from './shutdown.js';
 
-/** What a schedule provider factory receives; it is built before the session manager. */
-export interface ScheduleDeps {
+/** Request bodies are tiny (session endpoints take none); a slow body is cut off after this. */
+const REQUEST_TIMEOUT_MS = 15_000;
+const HEADERS_TIMEOUT_MS = 10_000;
+/** How often Node enforces the two timeouts above (its default is 30 s). */
+const TIMEOUT_CHECK_INTERVAL_MS = 1_000;
+/** GTFS trip IDs can be long; route parameters up to this many characters are accepted. */
+const MAX_PARAM_LENGTH = 1_000;
+
+/** What the `services` factory receives. */
+export interface ServiceDeps {
   readonly config: Config;
   readonly clock: Clock;
   readonly logger: FastifyBaseLogger;
   readonly store: SnapshotStore;
 }
 
-export interface AppOptions {
+/** What the `schedule` factory receives: the service deps plus the built services. */
+export interface ScheduleDeps<S> extends ServiceDeps {
+  readonly services: S;
+}
+
+export interface AppOptions<S = undefined> {
   config: Config;
-  /** Called after an idle shutdown with `EXIT_ON_IDLE` once the server has closed (drained). */
+  /** Called after an idle shutdown with `EXIT_ON_IDLE`, once the server has drained (bounded). */
   exit: () => void;
   clock?: Clock;
   /** Log sink (redacted for feed URLs); default stdout. */
   logDestination?: LogDestination;
   logLevel?: string;
+  /** Builds the app's services, exposed to `init` and routes as `context.services`. */
+  services?: (deps: ServiceDeps) => S;
   /** Builds the schedule provider; default {@link noopScheduleProvider}. */
-  schedule?: (deps: ScheduleDeps) => ScheduleProvider;
+  schedule?: (deps: ScheduleDeps<S>) => ScheduleProvider;
+  /** Called once with the full context after it is built, before routes (e.g. store listeners). */
+  init?: (context: ServerContext<S>) => void | Promise<void>;
   /** Route plugins mounted under `/api/v1`. */
-  routes?: readonly ApiRoutes[];
+  routes?: readonly ApiRoutes<S>[];
 }
 
-export interface App {
+export interface App<S = undefined> {
   readonly app: FastifyInstance;
-  readonly context: ServerContext;
+  readonly context: ServerContext<S>;
 }
 
 /** Composes the whole server. Nothing is fetched until a session start or ping wakes it. */
-export async function buildApp(options: AppOptions): Promise<App> {
+export async function buildApp<S = undefined>(options: AppOptions<S>): Promise<App<S>> {
   const { config, exit, clock = systemClock } = options;
+  const headers = securityHeaders(config.tileHost);
   const app = Fastify({
     logger: {
       level: options.logLevel ?? 'info',
@@ -55,21 +80,37 @@ export async function buildApp(options: AppOptions): Promise<App> {
     // Per-request lines would be most of the log volume (a ping every 10 s per viewer).
     logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 16 * 1024,
+    // Bound slow clients, so neither concurrency nor a graceful drain can be held hostage.
+    requestTimeout: REQUEST_TIMEOUT_MS,
+    http: {
+      requestTimeout: REQUEST_TIMEOUT_MS,
+      headersTimeout: HEADERS_TIMEOUT_MS,
+      connectionsCheckingInterval: TIMEOUT_CHECK_INTERVAL_MS,
+    },
+    // While draining, answer requests normally (with our envelope and headers) rather than with
+    // Fastify's bare 503; the connection is closed after each response.
+    return503OnClosing: false,
+    routerOptions: { maxParamLength: MAX_PARAM_LENGTH },
+    // Malformed URLs and similar router failures get the standard envelope and headers.
+    frameworkErrors: (_error: FastifyError, _request, reply: FastifyReply) =>
+      reply
+        .code(400)
+        .headers(headers)
+        .header('cache-control', 'no-store')
+        .send(errorBody('bad_request', 'The request URL is malformed.')),
   });
   const logger = app.log;
   for (const warning of config.warnings) logger.warn(warning);
 
   const store = new SnapshotStore({
     clock,
+    logger: logger.child({ component: 'store' }),
     retentionMs: config.retentionMs,
     memoryLimitBytes: config.historyMemoryLimitBytes,
   });
-  const schedule = (options.schedule ?? (() => noopScheduleProvider))({
-    config,
-    clock,
-    logger,
-    store,
-  });
+  const deps: ServiceDeps = { config, clock, logger, store };
+  const services = (options.services?.(deps) ?? undefined) as S;
+  const schedule = (options.schedule ?? (() => noopScheduleProvider))({ ...deps, services });
   const urls = { vehiclePositions: config.vehiclePositionsUrl, tripUpdates: config.tripUpdatesUrl };
   const pollers = FEED_KINDS.flatMap((feed) => {
     const url = urls[feed];
@@ -94,27 +135,26 @@ export async function buildApp(options: AppOptions): Promise<App> {
     store,
     schedule,
     pollers,
-    onIdleExit: () => {
-      void app.close().then(exit, exit);
-    },
+    onIdleExit: () => closeThenExit(app, exit),
   });
-  const context: ServerContext = {
+  const context: ServerContext<S> = {
+    services,
     config,
     clock,
     logger,
     store,
     schedule,
     session,
-    guard: createDataEndpointGuard(session, schedule),
+    guard: createDataEndpointGuard(session),
   };
 
-  const headers = securityHeaders(config.tileHost);
   app.addHook('onRequest', async (_request, reply) => {
     reply.headers(headers);
   });
   app.setErrorHandler(handleApiError);
   app.addHook('onClose', async () => session.dispose());
 
+  await options.init?.(context);
   await app.register(apiPlugin(context, options.routes ?? []), { prefix: API_PREFIX });
   const webBuild = hasWebBuild(config.webDistDir) ? config.webDistDir : null;
   if (!webBuild) logger.info('no web build found; serving the API only');

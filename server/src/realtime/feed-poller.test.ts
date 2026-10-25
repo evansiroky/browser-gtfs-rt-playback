@@ -37,8 +37,13 @@ beforeEach(async () => {
   host = await startFeedHost();
   clock = new FakeClock();
   start = clock.now();
-  store = new SnapshotStore({ clock, retentionMs: 3_600_000, memoryLimitBytes: 10_000_000 });
   logs = [];
+  store = new SnapshotStore({
+    clock,
+    logger: captureLogger(logs),
+    retentionMs: 3_600_000,
+    memoryLimitBytes: 10_000_000,
+  });
   hits = [];
   snapshots = 0;
   store.onSnapshot(() => snapshots++);
@@ -228,5 +233,36 @@ describe('FeedPoller', () => {
     for (const secret of [host.origin, '127.0.0.1', 'SUPERSECRET123', 'api_key', '/vp']) {
       expect(output).not.toContain(secret);
     }
+  });
+
+  it('contains failures after a successful fetch: no unhandled rejection, polling continues', async () => {
+    const rejections: unknown[] = [];
+    const previous = process.listeners('unhandledRejection');
+    process.removeAllListeners('unhandledRejection');
+    process.on('unhandledRejection', (reason) => rejections.push(reason));
+    try {
+      respondWith(ok());
+      store.onSnapshot(() => {
+        throw new Error('listener bug');
+      });
+      const add = store.add.bind(store);
+      let calls = 0;
+      store.add = (...args) => {
+        if (++calls === 2) throw new Error('store bug');
+        return add(...args);
+      };
+      poller.start();
+      await settled(1);
+      await clock.advanceAsync(INTERVAL);
+      await vi.waitFor(() => expect(logs.join('\n')).toContain('realtime poll failed'));
+      await clock.advanceAsync(INTERVAL);
+      await settled(2);
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.removeAllListeners('unhandledRejection');
+      for (const listener of previous) process.on('unhandledRejection', listener);
+    }
+    expect(rejections).toEqual([]);
+    expect(hits).toEqual([0, 10_000, 20_000]);
   });
 });

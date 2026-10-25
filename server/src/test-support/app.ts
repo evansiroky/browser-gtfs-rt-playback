@@ -5,11 +5,11 @@ import type { Env } from '../config.js';
 import { testConfig } from './feeds.js';
 
 /** Builds the real app with a fake clock, captured logs and a spy `exit`. */
-export async function testApp(env: Env = {}, options: Partial<AppOptions> = {}) {
+export async function testApp<S = undefined>(env: Env = {}, options: Partial<AppOptions<S>> = {}) {
   const clock = new FakeClock();
   const logs: string[] = [];
   const exit = vi.fn();
-  const built = await buildApp({
+  const built = await buildApp<S>({
     config: testConfig(env),
     clock,
     exit,

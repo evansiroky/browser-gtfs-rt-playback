@@ -1,5 +1,7 @@
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
+import type { FastifyBaseLogger } from 'fastify';
 import type { Clock } from '../clock.js';
+import { runHook } from '../hooks.js';
 
 export const { transit_realtime } = GtfsRealtimeBindings;
 export type FeedMessage = GtfsRealtimeBindings.transit_realtime.FeedMessage;
@@ -43,6 +45,8 @@ export function headerTimestamp(message: FeedMessage): number | null {
 
 export interface SnapshotStoreOptions {
   clock: Clock;
+  /** Receives listener failures. */
+  logger: FastifyBaseLogger;
   retentionMs: number;
   memoryLimitBytes: number;
 }
@@ -53,15 +57,19 @@ export interface SnapshotStoreOptions {
  * - Snapshots older than the retention window (by receive time) are dropped whenever a snapshot is
  *   added and on every {@link prune} (the pollers call it on every tick).
  * - Total retained bytes are bounded by the memory limit; the oldest snapshots across both feeds
- *   are evicted first. Memory is approximated by the protobuf byte length of each snapshot (the
- *   decoded form is never retained). The configuration guarantees the limit holds at least one
- *   maximum-size snapshot per feed, so each feed's latest snapshot always survives eviction.
+ *   are evicted first, but never a feed's latest snapshot. Memory is approximated by the protobuf
+ *   byte length of each snapshot (the decoded form is never retained). The configuration
+ *   guarantees the limit holds one maximum-size snapshot per feed, so sparing the latest ones
+ *   never breaks the limit.
  * - {@link clear} (dormancy) forgets everything.
  *
- * Listeners run synchronously, in registration order. Each `on*` returns an unsubscribe function.
+ * Listeners run synchronously, in registration order, after the store is consistent again (a new
+ * snapshot is announced after pruning). A listener that throws is logged and skipped; the store
+ * and the other listeners are unaffected. Each `on*` returns an unsubscribe function.
  */
 export class SnapshotStore {
   readonly #clock: Clock;
+  readonly #logger: FastifyBaseLogger;
   readonly #retentionMs: number;
   readonly #memoryLimitBytes: number;
   readonly #snapshots: Record<FeedKind, Snapshot[]> = { vehiclePositions: [], tripUpdates: [] };
@@ -70,8 +78,9 @@ export class SnapshotStore {
   readonly #evictListeners = new Set<EvictListener>();
   readonly #clearListeners = new Set<ClearListener>();
 
-  constructor({ clock, retentionMs, memoryLimitBytes }: SnapshotStoreOptions) {
+  constructor({ clock, logger, retentionMs, memoryLimitBytes }: SnapshotStoreOptions) {
     this.#clock = clock;
+    this.#logger = logger;
     this.#retentionMs = retentionMs;
     this.#memoryLimitBytes = memoryLimitBytes;
   }
@@ -87,8 +96,10 @@ export class SnapshotStore {
     };
     this.#snapshots[feed].push(snapshot);
     this.#bytes += bytes.byteLength;
-    for (const listener of this.#snapshotListeners) listener(snapshot, message);
     this.prune();
+    for (const listener of this.#snapshotListeners) {
+      runHook(this.#logger, 'onSnapshot', () => listener(snapshot, message));
+    }
     return snapshot;
   }
 
@@ -100,7 +111,7 @@ export class SnapshotStore {
       while (list[0] && list[0].receivedAt < cutoff) this.#evictFirst(feed, 'retention');
     }
     while (this.#bytes > this.#memoryLimitBytes) {
-      const oldest = this.#oldestFeed();
+      const oldest = this.#oldestFeed({ spareLatest: true });
       if (!oldest) break;
       this.#evictFirst(oldest, 'memory');
     }
@@ -131,7 +142,7 @@ export class SnapshotStore {
     this.#snapshots.vehiclePositions = [];
     this.#snapshots.tripUpdates = [];
     this.#bytes = 0;
-    for (const listener of this.#clearListeners) listener();
+    for (const listener of this.#clearListeners) runHook(this.#logger, 'onClear', listener);
   }
 
   onSnapshot(listener: SnapshotListener): () => void {
@@ -149,9 +160,11 @@ export class SnapshotStore {
     return () => this.#clearListeners.delete(listener);
   }
 
-  #oldestFeed(): FeedKind | null {
+  /** The feed holding the oldest snapshot; with `spareLatest`, among feeds with more than one. */
+  #oldestFeed({ spareLatest = false } = {}): FeedKind | null {
     let oldest: FeedKind | null = null;
     for (const feed of FEED_KINDS) {
+      if (spareLatest && this.#snapshots[feed].length < 2) continue;
       const first = this.#snapshots[feed][0];
       const current = oldest && this.#snapshots[oldest][0];
       if (first && (!current || first.receivedAt < current.receivedAt)) oldest = feed;
@@ -163,6 +176,8 @@ export class SnapshotStore {
     const snapshot = this.#snapshots[feed].shift();
     if (!snapshot) return;
     this.#bytes -= snapshot.bytes.byteLength;
-    for (const listener of this.#evictListeners) listener(snapshot, reason);
+    for (const listener of this.#evictListeners) {
+      runHook(this.#logger, 'onEvict', () => listener(snapshot, reason));
+    }
   }
 }
