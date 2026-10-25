@@ -149,6 +149,18 @@ describe('edge cases', () => {
     expect(() => decodePolyline6('ab cd')).toThrow(/invalid character/);
     expect(() => decodePolyline6('ÿ?')).toThrow(/invalid character/);
   });
+
+  it('rejects values with runaway continuation chunks', () => {
+    expect(() => decodePolyline6('_'.repeat(205) + '??')).toThrow(/value too long/);
+    expect(() => decodePolyline6('~'.repeat(20) + '??')).toThrow(/value too long/);
+    expect(() => decodePolyline6('_'.repeat(10) + '?')).toThrow(/value too long/);
+  });
+
+  it('still accepts the longest legitimate values', () => {
+    // 1e7 degrees from the origin needs 10 chunks per component.
+    const far: LatLng[] = [[9999999.999999, -9999999.999999]];
+    expect(decodePolyline6(encodePolyline6(far))).toEqual(far);
+  });
 });
 
 describe('rounding at the 6th decimal', () => {

@@ -12,6 +12,9 @@ const PRECISION = 1e6;
 const CHUNK_RADIX = 32;
 const CONTINUATION = 0x20;
 const ASCII_OFFSET = 63;
+// 10 chunks carry 50 bits, enough for any coordinate difference a real shape can have while
+// keeping every decoded integer exactly representable.
+const MAX_CHUNKS_PER_VALUE = 10;
 
 function encodeValue(value: number, out: string[]): void {
   // Zigzag: the sign goes in the lowest bit.
@@ -42,7 +45,7 @@ export function encodePolyline6(points: readonly LatLng[]): string {
   return out.join('');
 }
 
-/** Decodes a precision-6 polyline. Throws `Error` for a malformed or truncated string. */
+/** Decodes a precision-6 polyline. Throws `Error` for a malformed, truncated or oversized-value string. */
 export function decodePolyline6(encoded: string): [latitude: number, longitude: number][] {
   const points: [number, number][] = [];
   let index = 0;
@@ -53,7 +56,11 @@ export function decodePolyline6(encoded: string): [latitude: number, longitude: 
     let result = 0;
     let scale = 1;
     let chunk: number;
+    let chunks = 0;
     do {
+      if (++chunks > MAX_CHUNKS_PER_VALUE) {
+        throw new Error('Malformed polyline: value too long');
+      }
       if (index >= encoded.length) {
         throw new Error('Malformed polyline: truncated value');
       }
@@ -70,7 +77,11 @@ export function decodePolyline6(encoded: string): [latitude: number, longitude: 
   while (index < encoded.length) {
     lat += readValue();
     lon += readValue();
-    points.push([lat / PRECISION, lon / PRECISION]);
+    const point: [number, number] = [lat / PRECISION, lon / PRECISION];
+    if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
+      throw new Error('Malformed polyline: non-finite coordinate');
+    }
+    points.push(point);
   }
   return points;
 }
