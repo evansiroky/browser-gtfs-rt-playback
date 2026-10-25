@@ -37,9 +37,17 @@ configured URL is not `https` or `http`.
 | API rate limit | 120 requests/min per client address | [api/conventions](../api/conventions.md) |
 | Map tile host | `https://tiles.openfreemap.org` | [architecture](../architecture.md#stack) (allowed by the Content-Security-Policy) |
 
-Every tunable is a positive whole number (or on/off), and the realtime history memory limit
-must hold at least two maximum-size realtime responses (so each feed's latest snapshot always
-fits); the server refuses to start otherwise. Error messages name the setting, never its value.
+The server refuses to start on a setting it cannot use, and its error messages name the
+setting, never its value:
+- Numeric tunables are positive whole numbers. Durations are at least 1 second and at most
+  2,147,483,647 ms (about 24.8 days, the longest timer the runtime supports), so a typo can
+  neither hammer a feed host nor wrap around to an immediate timer.
+- Exit on idle is on or off.
+- The map tile host is an `http` or `https` origin: no path, query or credentials.
+- A feed URL with credentials before the host (`https://user:pass@host/…`) is refused;
+  credentials belong in the query string.
+- The realtime history memory limit holds at least two maximum-size realtime responses, so
+  each feed's latest snapshot always fits.
 
 The retention default is also a ceiling: configuration may lower it but the server clamps
 any value above 60 minutes to 60 ([Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience)).
