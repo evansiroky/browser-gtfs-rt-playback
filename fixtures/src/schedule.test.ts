@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { TIMEZONE } from './catalog.js';
 import { toCsv, type Row } from './csv.js';
 import { scenario } from './scenario.js';
+import type { TripData } from './schedule.js';
 import { agencyInstant, parseHms } from './time.js';
 
 /** A small RFC 4180 reader, independent of the writer under test. */
@@ -130,6 +131,48 @@ describe('schedule zip', () => {
     const partial = of('plain-active-tu');
     expect(partial[0]!.departure_time).toBe('');
     expect(partial[4]!.arrival_time).toBe('');
+  });
+
+  it('keeps blocks free of overlapping trips', () => {
+    const times = new Map<string, [number, number]>();
+    for (const t of sc.schedule.trips) {
+      const first = t.stopTimes[0]!;
+      const last = t.stopTimes[t.stopTimes.length - 1]!;
+      times.set(t.row.trip_id!, [
+        (first.departure ?? first.arrival)!,
+        (last.arrival ?? last.departure)!,
+      ]);
+    }
+    const blocks = new Map<string, TripData[]>();
+    for (const t of sc.schedule.trips.filter((t) => t.row.block_id)) {
+      const key = `${t.row.block_id}/${t.row.service_id}`;
+      blocks.set(key, [...(blocks.get(key) ?? []), t]);
+    }
+    expect(blocks.size).toBeGreaterThan(0);
+    for (const trips of blocks.values()) {
+      const spans = trips.map((t) => times.get(t.row.trip_id!)!).sort((a, b) => a[0] - b[0]);
+      spans.forEach((span, i) => {
+        if (i > 0) expect(span[0]).toBeGreaterThanOrEqual(spans[i - 1]![1]);
+      });
+    }
+  });
+
+  it('has times past 24:00:00 for the overnight trips, and a window that crosses midnight', () => {
+    const windows = table('frequencies.txt').filter((r) => r.trip_id === 'freq-overnight');
+    expect(windows).toEqual([
+      {
+        trip_id: 'freq-overnight',
+        start_time: '23:00:00',
+        end_time: '25:00:00',
+        headway_secs: '600',
+        exact_times: '0',
+      },
+    ]);
+    expect(
+      table('stop_times.txt').find(
+        (r) => r.trip_id === 'overnight-daily' && r.stop_sequence === '5',
+      )?.arrival_time,
+    ).toBe('25:30:00');
   });
 
   it('has times past 24:00:00 for the overnight trip', () => {

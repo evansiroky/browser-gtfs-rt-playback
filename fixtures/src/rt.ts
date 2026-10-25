@@ -72,6 +72,11 @@ function header(nowSec: number): bindings.transit_realtime.IFeedHeader {
   };
 }
 
+/** Epoch seconds a vehicle position carries when the feed is published at `nowSec`. */
+export function vehicleTimestamp(spec: VehicleSpec, nowSec: number): number {
+  return nowSec - spec.lagSecs;
+}
+
 function vehicleEntity(
   spec: VehicleSpec,
   paths: ReadonlyMap<string, ShapePath>,
@@ -109,7 +114,7 @@ function vehicleEntity(
       currentStopSequence: stopSequence,
       stopId: `S${stopSequence}`,
       currentStatus: status,
-      timestamp: nowSec - spec.lagSecs,
+      timestamp: vehicleTimestamp(spec, nowSec),
       congestionLevel: rt.VehiclePosition.CongestionLevel.RUNNING_SMOOTHLY,
       occupancyStatus: spec.occupancy,
       occupancyPercentage: spec.occupancyPercentage,

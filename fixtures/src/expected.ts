@@ -7,7 +7,13 @@ import type { Row } from './csv.js';
 import type { ScheduleData, TripData } from './schedule.js';
 import { WEEKDAY_COLUMNS } from './schedule.js';
 import type { TripRef } from './rt.js';
-import { addDays, instantSeconds, parseHms, serviceDateOf, weekdayOf } from './time.js';
+import {
+  addDays,
+  instantSeconds as instantOf,
+  parseHms,
+  serviceDateOf,
+  weekdayOf,
+} from './time.js';
 
 export type Reason =
   | 'unknown_trip'
@@ -43,6 +49,11 @@ export interface RealtimeInfo {
   hasTripUpdate: boolean;
   /** The reference's start_time, as sent. */
   startTime: string | null;
+  /**
+   * Epoch seconds of the newest vehicle position timestamp among the references, else the feed
+   * timestamp. As of the instant the scenario was built for.
+   */
+  lastSeenAt: number;
 }
 
 interface RowBase {
@@ -68,10 +79,11 @@ export interface ExpectedActiveRow extends RowBase {
 export interface ExpectedUnscheduledRow extends RowBase {
   reason: Reason;
   /**
-   * The span of the entry the reference names. Present only for `outside_scheduled_time`, the one
-   * reason for which the spec pins it down; for the others the API's value is not specified here.
+   * `scheduledStart` / `scheduledEnd` of the API row. null where the spec says they are null (an
+   * unknown trip, a trip with the configuration error); the span of the entry the reference names
+   * for `outside_scheduled_time`; absent for the other reasons, which the spec leaves open.
    */
-  scheduledSpan?: { start: number; end: number };
+  scheduledSpan?: { start: number; end: number } | null;
   realtime: RealtimeInfo;
 }
 
@@ -104,6 +116,8 @@ export interface Expected {
 
 export interface RefSource {
   vehicleId: string | null;
+  /** Vehicle position timestamp, epoch seconds; absent for trip updates. */
+  timestamp?: number;
   /** null: the entity has no trip descriptor. */
   ref: TripRef | null;
 }
@@ -112,6 +126,8 @@ export interface EvaluationInput {
   data: ScheduleData;
   timeZone: string;
   nowMs: number;
+  /** Header timestamp of both feeds, epoch seconds. */
+  feedTimestamp: number;
   vehicles: readonly RefSource[];
   tripUpdates: readonly RefSource[];
 }
@@ -147,6 +163,8 @@ interface Reference {
   isVehicle: boolean;
   tripId: string;
   vehicleId: string | null;
+  timestamp: number | null;
+  routeId: string | null;
   startTime: string | null;
   date: string;
   /** Epoch seconds of `startTime` on `date`. */
@@ -192,6 +210,12 @@ export function operatesOn(data: ScheduleData, serviceId: string, date: string):
 
 export function evaluate(input: EvaluationInput): Expected {
   const { data, timeZone } = input;
+  const dayStarts = new Map<string, number>();
+  /** Epoch seconds of a GTFS time on a service date (day starts are looked up once per date). */
+  const instantSeconds = (date: string, secs: number): number => {
+    if (!dayStarts.has(date)) dayStarts.set(date, instantOf(date, 0, timeZone));
+    return dayStarts.get(date)! + secs;
+  };
   const today = serviceDateOf(new Date(input.nowMs), timeZone);
   const yesterday = addDays(today, -1);
   const candidateDates = [yesterday, today];
@@ -205,7 +229,7 @@ export function evaluate(input: EvaluationInput): Expected {
 
   const entriesOn = (info: TripInfo, date: string): Entry[] => {
     if (!operatesOn(data, info.serviceId, date)) return [];
-    const at = (secs: number): number => instantSeconds(date, secs, timeZone);
+    const at = (secs: number): number => instantSeconds(date, secs);
     if (info.frequencyRows.length === 0) {
       return [
         {
@@ -241,7 +265,7 @@ export function evaluate(input: EvaluationInput): Expected {
     const byOffset = new Map<number, Entry>();
     for (const date of candidateDates) {
       for (const e of entriesOn(info, date).filter(overlapsMinute)) {
-        const offset = e.start - instantSeconds(date, 0, timeZone);
+        const offset = e.start - instantSeconds(date, 0);
         if (byOffset.get(offset)?.date === otherDate(date)) {
           throw new Error(
             `scenario is ambiguous: ${info.tripId} is active on both candidate dates`,
@@ -252,12 +276,31 @@ export function evaluate(input: EvaluationInput): Expected {
       }
     }
   }
-  const activeDates = (tripId: string): string[] =>
-    candidateDates.filter((d) => active.some((e) => e.tripId === tripId && e.date === d));
+  /**
+   * Step 1 of the service-date inference: the candidate dates on which the trip has an active entry
+   * (for a frequency trip whose reference has a start_time, an active instance starting at exactly
+   * that time on that date).
+   */
+  const datesWithActiveEntry = (
+    info: TripInfo | undefined,
+    tripId: string,
+    startTime: string | null,
+  ): string[] =>
+    candidateDates.filter((date) =>
+      active.some(
+        (e) =>
+          e.tripId === tripId &&
+          e.date === date &&
+          (!info || info.frequencyRows.length === 0 || startTime === null
+            ? true
+            : e.start === instantSeconds(date, parseHms(startTime))),
+      ),
+    );
 
-  const inferDate = (tripId: string): string => {
+  // Each step prefers the later candidate date when both qualify.
+  const inferDate = (tripId: string, startTime: string | null): string => {
     const info = trips.get(tripId);
-    const withActive = activeDates(tripId);
+    const withActive = datesWithActiveEntry(info, tripId, startTime);
     if (withActive.length > 0) return withActive[withActive.length - 1]!;
     const operating = info ? candidateDates.filter((d) => operatesOn(data, info.serviceId, d)) : [];
     return operating.length > 0 ? operating[operating.length - 1]! : today;
@@ -265,19 +308,18 @@ export function evaluate(input: EvaluationInput): Expected {
 
   const references: Reference[] = [];
   const collect = (sources: readonly RefSource[], isVehicle: boolean): void => {
-    for (const { ref, vehicleId } of sources) {
+    for (const { ref, vehicleId, timestamp } of sources) {
       if (!ref?.tripId) continue;
-      const date = ref.startDate ?? inferDate(ref.tripId);
+      const date = ref.startDate ?? inferDate(ref.tripId, ref.startTime ?? null);
       references.push({
         isVehicle,
         tripId: ref.tripId,
         vehicleId,
+        timestamp: timestamp ?? null,
+        routeId: ref.routeId ?? null,
         startTime: ref.startTime ?? null,
         date,
-        start:
-          ref.startTime === undefined
-            ? null
-            : instantSeconds(date, parseHms(ref.startTime), timeZone),
+        start: ref.startTime === undefined ? null : instantSeconds(date, parseHms(ref.startTime)),
       });
     }
   };
@@ -287,13 +329,15 @@ export function evaluate(input: EvaluationInput): Expected {
   const matches = (e: Entry, r: Reference): boolean =>
     e.tripId === r.tripId && e.date === r.date && (e.frequency === null || e.start === r.start);
 
+  /** Route and headsign of a row; the route ID falls back to the reference's for an unknown trip. */
   const routeFields = (
     tripId: string,
+    referenceRouteId: string | null = null,
   ): Pick<RowBase, 'routeId' | 'routeShortName' | 'routeLongName' | 'headsign'> => {
     const row = trips.get(tripId)?.trip.row;
     const route = row ? routes.get(row.route_id!) : undefined;
     return {
-      routeId: row?.route_id ?? null,
+      routeId: row?.route_id ?? referenceRouteId,
       routeShortName: route?.route_short_name ?? null,
       routeLongName: route?.route_long_name ?? null,
       headsign: row?.trip_headsign ?? null,
@@ -311,6 +355,10 @@ export function evaluate(input: EvaluationInput): Expected {
       hasVehiclePosition: refs.some((r) => r.isVehicle),
       hasTripUpdate: refs.some((r) => !r.isVehicle),
       startTime: refs[0]!.startTime,
+      lastSeenAt: Math.max(
+        ...refs.flatMap((r) => (r.isVehicle && r.timestamp !== null ? [r.timestamp] : [])),
+        ...(refs.some((r) => r.isVehicle) ? [] : [input.feedTimestamp]),
+      ),
     };
   };
 
@@ -359,8 +407,8 @@ export function evaluate(input: EvaluationInput): Expected {
           ? info.frequencyRows
               .map((row) => ({
                 row,
-                s: instantSeconds(ref.date, row.startSecs, timeZone),
-                e: instantSeconds(ref.date, row.endSecs, timeZone),
+                s: instantSeconds(ref.date, row.startSecs),
+                e: instantSeconds(ref.date, row.endSecs),
               }))
               .find(({ s, e }) => s <= ref.start! && ref.start! < e)
           : undefined;
@@ -368,7 +416,7 @@ export function evaluate(input: EvaluationInput): Expected {
         tripId: ref.tripId,
         serviceDate: ref.date,
         reason,
-        ...routeFields(ref.tripId),
+        ...routeFields(ref.tripId, ref.routeId),
         frequency: window
           ? {
               exactTimes: window.row.exactTimes,
@@ -379,6 +427,9 @@ export function evaluate(input: EvaluationInput): Expected {
           : null,
         ...(reason === 'outside_scheduled_time' &&
           named && { scheduledSpan: { start: named.start, end: named.end } }),
+        ...((reason === 'unknown_trip' || reason === 'configuration_error') && {
+          scheduledSpan: null,
+        }),
         realtime: realtimeInfo(refs),
       };
       return { row, sortStart: ref.start ?? -Infinity };

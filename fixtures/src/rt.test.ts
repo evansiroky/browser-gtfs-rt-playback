@@ -84,14 +84,22 @@ describe('encoded feeds', () => {
     expect(noTrip.filter((v) => v.trip?.tripId === '')).toHaveLength(1);
   });
 
-  it('give trip updates stop-level data, except for the unknown trip', () => {
+  it('give every trip update a stop_time_update and a delay, as a SCHEDULED update needs', () => {
     const updates = tu.entity.map((e) => e.tripUpdate!);
-    const withStops = updates.filter((u) => (u.stopTimeUpdate?.length ?? 0) > 0);
-    expect(withStops.length).toBeGreaterThan(0);
-    expect(
-      updates.find((u) => u.trip.tripId === 'ghost-tu-trip')?.stopTimeUpdate ?? [],
-    ).toHaveLength(0);
-    for (const u of withStops) expect(typeof u.delay).toBe('number');
+    expect(updates).toHaveLength(sc.expected.stats.tripUpdates);
+    for (const u of updates) {
+      expect(u.stopTimeUpdate?.length ?? 0, u.trip.tripId ?? '').toBeGreaterThan(0);
+      expect(typeof u.delay).toBe('number');
+    }
+  });
+
+  it('name vehicles in trip updates that no vehicle position carries', () => {
+    const positionIds = new Set(vehicles(vp).map((v) => v.vehicle!.id));
+    const updateIds = tu.entity.flatMap((e) =>
+      e.tripUpdate!.vehicle?.id ? [e.tripUpdate!.vehicle.id] : [],
+    );
+    expect(updateIds).toContain('tu-unit-1');
+    expect(updateIds.filter((id) => !positionIds.has(id)).length).toBeGreaterThanOrEqual(2);
   });
 
   it('use start_date for some references and omit it for others', () => {
