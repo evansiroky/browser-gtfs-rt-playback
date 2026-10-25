@@ -37,9 +37,13 @@ run (see [infrastructure.md](infrastructure.md)). State is process memory only â
 - **Web app:** React + Vite + TypeScript, **shadcn/ui** (with Tailwind CSS) for all UI
   components. Server state fetched with a data-fetching library that supports interval
   refetch and pausing when the tab is hidden.
-- **Map:** MapLibre GL JS with a keyless public vector-tile provider. Trip shapes arrive as
-  precision-6 encoded polylines and are decoded in the browser. The tile provider is a
-  single configuration constant. Tiles are the only third-party request the browser makes.
+- **Map:** MapLibre GL JS with a keyless public vector-tile provider, by default OpenFreeMap
+  (`https://tiles.openfreemap.org`), which serves the style, tiles, sprites and glyphs from one
+  origin. Trip shapes arrive as precision-6 encoded polylines and are decoded in the browser.
+  The provider's origin is configured in exactly two places that must agree: the web app's map
+  style URL, and the server's map tile host setting
+  ([behaviors/configuration.md](behaviors/configuration.md#tunables-and-defaults)), which the
+  Content-Security-Policy allows. Map assets are the only third-party requests the browser makes.
 - **Tests:** Vitest for server and web logic; behaviors with a numeric or temporal rule
   (service-date resolution, active-trip window, dormancy timers) are unit-tested with an
   injectable clock.

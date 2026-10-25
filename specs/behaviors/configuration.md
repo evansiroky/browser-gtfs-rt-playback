@@ -35,6 +35,7 @@ configured URL is not `https` or `http`.
 | Realtime retention | 60 min | [data-retention](data-retention.md) |
 | Realtime history memory limit | 512 MiB | data-retention |
 | API rate limit | 120 requests/min per client address | [api/conventions](../api/conventions.md) |
+| Map tile host | `https://tiles.openfreemap.org` | [architecture](../architecture.md#stack) (allowed by the Content-Security-Policy) |
 
 The retention default is also a ceiling: configuration may lower it but the server clamps
 any value above 60 minutes to 60 ([Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience)).
