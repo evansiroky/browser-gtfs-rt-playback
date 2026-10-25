@@ -52,8 +52,8 @@ owns it ([`server-core`](server-core.md), [`web-shell`](web-shell.md),
 - [ ] Every type in `shared/src/api.ts` is traceable to a spec section; a reviewer diffing
       `specs/api/*.md` against it finds no missing field, wrong nullability, or extra field.
 - [ ] Polyline codec: known Google test vectors (scaled for precision 6) encode and decode
-      correctly; round-trip of random points within ±0.0000005° tolerance; empty and
-      single-point inputs; negative coordinates; large values.
+      correctly; round-trip of random points within half a microdegree plus 1e-9
+      floating-point slack; empty and single-point inputs; negative coordinates; large values.
 - [ ] `npm run format:check` passes; `.gitignore` excludes build output and `node_modules`.
 - [ ] `npm ls` shows no duplicate TypeScript/ESLint versions across workspaces.
 
