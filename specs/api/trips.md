@@ -22,7 +22,8 @@ trips: [{
   tripId:       string
   serviceDate:  "YYYYMMDD"                           // derived, informational
   routeId:      string | null                        // from trips.txt, else the realtime reference
-  routeShortName: string | null                      // from routes.txt; null if route unknown
+  routeShortName: string | null                      // from the routes.txt row for routeId, even when the
+                                                     // trip is unknown; null if routeId is null or not in routes.txt
   routeLongName:  string | null
   headsign:     string | null                        // trips.txt trip_headsign
   scheduledStart: epoch seconds | null               // the entry's span; null when the trip is unknown

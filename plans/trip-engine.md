@@ -57,7 +57,12 @@ eviction (`historyStartsAt`), and are forgotten on dormancy.
    DST transition days, exact instance matching/mismatch/missing start_time, mixed
    configuration error (excluded + `configuration_error` reason), unknown/not-in-service/outside
    window, vehicle without trip id (counted, unlisted), null-vs-zero stats, ordering.
-8. Performance test: 100k-trip synthetic schedule — lists computed in a few hundred ms.
+8. Pin route-name lookup for unknown trips: add to the [`test-fixtures`](test-fixtures.md)
+   scenario (and its `expected`/oracle) an unknown-trip reference whose `route_id` DOES exist in
+   `routes.txt`, expecting `routeShortName`/`routeLongName` looked up from it (the existing
+   ghost trip uses a route that is not in `routes.txt`, expecting null names). The oracle's
+   independent reviewer flagged that this case is currently unpinned.
+9. Performance test: 100k-trip synthetic schedule — lists computed in a few hundred ms.
 
 ## Validation
 - [ ] `npm run lint`, `typecheck`, `test`, `build` pass.
