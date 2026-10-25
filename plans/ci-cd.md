@@ -35,6 +35,9 @@ Configuring GitHub repository variables and running the pipelines for real is an
 - `ci.yml` (reusable via `workflow_call` + `pull_request` + `push: main`), `deploy.yml`,
   `infra.yml`; pinned third-party action versions (full SHA or major with a comment); least
   `permissions:` per job (`id-token: write` only where needed); `concurrency` groups.
+- The repository variables are named exactly `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`,
+  `GCP_REGION` and `TF_STATE_BUCKET` (chosen by [`bootstrap-scripts`](bootstrap-scripts.md), which
+  prints them).
 - Derive the WIF provider path and service-account emails from the variables exactly per the
   bootstrap naming contract in [`bootstrap-scripts`](bootstrap-scripts.md) and the deploy SA in
   [`terraform-infra`](terraform-infra.md); a mismatch is a bug in this plan.
