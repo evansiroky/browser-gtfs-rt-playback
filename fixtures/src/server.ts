@@ -13,9 +13,11 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`bad po
 if (now && Number.isNaN(now.getTime()))
   throw new Error(`--now is not an ISO 8601 instant: ${nowArg}`);
 
+// Loopback unless --host says otherwise; deliberately not read from $HOST, which is often set
+// to something else in shells and containers.
 const feeds = await startFakeFeeds({
   port,
-  host: arg('host') ?? process.env.HOST,
+  host: arg('host'),
   now,
   slowMs: process.env.FAKE_FEEDS_SLOW_MS ? Number(process.env.FAKE_FEEDS_SLOW_MS) : undefined,
 });
@@ -28,7 +30,7 @@ console.log(`  schedule           ${urls.schedule}`);
 console.log(`  vehicle positions  ${urls.vehiclePositions}`);
 console.log(`  trip updates       ${urls.tripUpdates}`);
 console.log(
-  `  control            ${urls.control}   (POST {"feed":"vp|tu|schedule","mode":"ok|http500|timeout|garbage|stale|slow"})`,
+  `  control            ${urls.control}   (POST {"feed":"vp|tu|schedule","mode":"ok|http500|timeout|garbage|old-data|slow"})`,
 );
 console.log(`  ground truth       ${urls.control.replace('__control', '__scenario')}`);
 

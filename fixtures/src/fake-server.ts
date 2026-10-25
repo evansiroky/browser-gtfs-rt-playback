@@ -4,11 +4,11 @@ import { scenario, type Scenario, type ScenarioOptions } from './scenario.js';
 import type { Feeds } from './rt.js';
 
 export type FeedName = 'vp' | 'tu' | 'schedule';
-export type FeedMode = 'ok' | 'http500' | 'timeout' | 'garbage' | 'stale' | 'slow';
+export type FeedMode = 'ok' | 'http500' | 'timeout' | 'garbage' | 'old-data' | 'slow';
 
 const FEEDS: readonly FeedName[] = ['vp', 'tu', 'schedule'];
-const MODES: readonly FeedMode[] = ['ok', 'http500', 'timeout', 'garbage', 'stale', 'slow'];
-const STALE_AGE_SECS = 3600;
+const MODES: readonly FeedMode[] = ['ok', 'http500', 'timeout', 'garbage', 'old-data', 'slow'];
+const OLD_DATA_AGE_SECS = 3600;
 const GARBAGE = Buffer.from('this is not a valid feed\n');
 
 const PATHS: Record<string, FeedName> = {
@@ -46,8 +46,8 @@ interface State {
   /** When set, the clock reads this wall-clock-independent instant (plus `offsetMs`). */
   frozenAt: number | null;
   offsetMs: number;
-  /** The bytes `stale` mode repeats, captured when the mode was entered. */
-  staleFeeds: Partial<Record<'vp' | 'tu', Uint8Array>>;
+  /** The bytes `old-data` mode repeats, captured by the first request after the mode was set. */
+  oldDataFeeds: Partial<Record<'vp' | 'tu', Uint8Array>>;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -83,7 +83,7 @@ export async function startFakeFeeds(options: FakeFeedsOptions = {}): Promise<Fa
     slowMs: options.slowMs ?? 3000,
     frozenAt: options.now ? options.now.getTime() : null,
     offsetMs: 0,
-    staleFeeds: {},
+    oldDataFeeds: {},
   };
 
   const clock = (): number => (state.frozenAt ?? Date.now()) + state.offsetMs;
@@ -108,8 +108,8 @@ export async function startFakeFeeds(options: FakeFeedsOptions = {}): Promise<Fa
     if (feed === 'schedule') return send(res, 200, 'application/zip', state.scenario.scheduleZip);
     const mode = state.modes[feed];
     const body =
-      mode === 'stale'
-        ? (state.staleFeeds[feed] ??= pick(feedsAt(elapsed() - STALE_AGE_SECS), feed))
+      mode === 'old-data'
+        ? (state.oldDataFeeds[feed] ??= pick(feedsAt(elapsed() - OLD_DATA_AGE_SECS), feed))
         : pick(feedsAt(elapsed()), feed);
     send(res, 200, 'application/x-protobuf', body);
   }
@@ -151,6 +151,11 @@ export async function startFakeFeeds(options: FakeFeedsOptions = {}): Promise<Fa
     if (req.method !== 'POST' && req.method !== 'PUT') {
       return json(res, 405, { error: 'use GET, POST or PUT' });
     }
+    // Only a JSON content type: a cross-origin page can send text/plain or a form without a
+    // preflight, but not application/json.
+    if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] ?? '')) {
+      return json(res, 415, { error: 'send Content-Type: application/json' });
+    }
     let body: Record<string, unknown>;
     try {
       body = JSON.parse(await readBody(req)) as Record<string, unknown>;
@@ -187,14 +192,14 @@ export async function startFakeFeeds(options: FakeFeedsOptions = {}): Promise<Fa
       state.scenario = scenario(nextNow ?? new Date(), scenarioOptions);
       state.frozenAt = nextNow === null ? null : nextNow.getTime();
       state.offsetMs = 0;
-      state.staleFeeds = {};
+      state.oldDataFeeds = {};
     }
     if (typeof advance === 'number') state.offsetMs += advance * 1000;
     if (typeof slowMs === 'number') state.slowMs = slowMs;
     if (feed !== undefined) {
       const name = feed as FeedName;
       state.modes[name] = mode as FeedMode;
-      if (name !== 'schedule') delete state.staleFeeds[name];
+      if (name !== 'schedule') delete state.oldDataFeeds[name];
     }
     json(res, 200, status());
   }
@@ -204,7 +209,12 @@ export async function startFakeFeeds(options: FakeFeedsOptions = {}): Promise<Fa
     if (path === '/__control') {
       handleControl(req, res).catch(() => json(res, 500, { error: 'control failed' }));
     } else if (path === '/__scenario') {
-      json(res, 200, { now: state.scenario.now.toISOString(), expected: state.scenario.expected });
+      // `expected` describes the instant the scenario was built for, not the (possibly advanced) clock.
+      json(res, 200, {
+        now: new Date(clock()).toISOString(),
+        scenarioNow: state.scenario.now.toISOString(),
+        expected: state.scenario.expected,
+      });
     } else if (PATHS[path] && (req.method === 'GET' || req.method === 'HEAD')) {
       handleFeed(PATHS[path], res);
     } else {
