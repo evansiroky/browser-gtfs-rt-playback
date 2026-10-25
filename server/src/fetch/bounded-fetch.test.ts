@@ -1,5 +1,5 @@
 import { inspect } from 'node:util';
-import { gzipSync } from 'node:zlib';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock } from '../clock.js';
 import { SecretUrl } from '../secret-url.js';
@@ -97,6 +97,17 @@ describe('fetchAll', () => {
     expect((await fetchAll(host.url('/exact'), options)).byteLength).toBe(1_000);
   });
 
+  it('applies the size limit to brotli and stacked gzip encodings too', async () => {
+    host.route(
+      '/br',
+      serveBytes(brotliCompressSync(new Uint8Array(100_000)), { 'content-encoding': 'br' }),
+    );
+    expect((await failure(fetchAll(host.url('/br'), options))).code).toBe('too_large');
+    const twice = gzipSync(gzipSync(new Uint8Array(100_000)));
+    host.route('/twice', serveBytes(twice, { 'content-encoding': 'gzip, gzip' }));
+    expect((await failure(fetchAll(host.url('/twice'), options))).code).toBe('too_large');
+  });
+
   it('follows up to 3 redirects, including relative ones', async () => {
     host.route('/r1', redirect(`${host.origin}/r2`));
     host.route('/r2', redirect('/r3'));
@@ -141,5 +152,31 @@ describe('fetchAll', () => {
     controller.abort();
     expect((await result).code).toBe('aborted');
     expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('refuses redirects away from the configured origin to internal hosts', async () => {
+    const port = new URL(host.origin).port;
+    for (const location of [
+      `http://localhost:${port}/feed`,
+      `http://127.0.0.1:${Number(port) + 1}/feed`,
+      'http://169.254.169.254/computeMetadata/v1/',
+      'http://metadata.google.internal/computeMetadata/v1/',
+      'http://10.0.0.8/feed',
+      'http://192.168.1.1/feed',
+      'http://172.20.0.1/feed',
+      `http://[::1]:${port}/feed`,
+      'http://[fe80::1]/feed',
+    ]) {
+      host.route('/r', redirect(location));
+      const error = await failure(fetchAll(host.url('/r?api_key=SECRET'), options));
+      expect(error.code, location).toBe('redirect_not_allowed');
+    }
+    expect(host.requests.every((request) => request.startsWith('/r'))).toBe(true);
+  });
+
+  it('follows redirects to other public hosts', async () => {
+    host.route('/r', redirect('http://feeds.example.invalid/feed'));
+    // Resolving the made-up host fails, which proves the redirect was attempted.
+    expect((await failure(fetchAll(host.url('/r'), options))).code).toBe('network_error');
   });
 });

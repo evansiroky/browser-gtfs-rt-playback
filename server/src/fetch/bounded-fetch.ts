@@ -1,6 +1,7 @@
 import type { StatusError } from '@gtfs-rt-debugger/shared';
 import type { Clock } from '../clock.js';
 import type { SecretUrl } from '../secret-url.js';
+import { isInternalHost } from './internal-host.js';
 
 export const MAX_REDIRECTS = 3;
 
@@ -37,7 +38,8 @@ export interface BoundedFetchOptions {
 /**
  * Fetches a configured feed URL and yields its body in chunks, enforcing the timeout and the
  * size limit while the body is read (the fetch is aborted as soon as the limit is crossed).
- * Redirects are followed manually: at most {@link MAX_REDIRECTS} hops, to `http`/`https` only.
+ * Redirects are followed manually: at most {@link MAX_REDIRECTS} hops, to `http`/`https` only,
+ * and never away from the configured origin to an internal host ({@link isInternalHost}).
  * The response may be gzip-encoded; the fetch decodes it as the body streams.
  */
 export async function* boundedFetch(
@@ -62,7 +64,8 @@ export async function* boundedFetch(
         : new FetchError('network_error', 'The feed could not be reached.');
 
   try {
-    let target = url.reveal();
+    const origin = url.reveal();
+    let target = origin;
     let response: Response;
     for (let hops = 0; ; hops++) {
       try {
@@ -94,6 +97,11 @@ export async function* boundedFetch(
       }
       if (next.protocol !== 'http:' && next.protocol !== 'https:') {
         throw new FetchError('redirect_not_allowed', 'The feed redirected to a non-HTTP location.');
+      }
+      // The configured origin is the operator's choice; a redirect anywhere else must not reach
+      // internal services (a feed host must not be able to pivot the server into the network).
+      if (next.origin !== origin.origin && isInternalHost(next.hostname)) {
+        throw new FetchError('redirect_not_allowed', 'The feed redirected to an internal address.');
       }
       target = next;
     }
