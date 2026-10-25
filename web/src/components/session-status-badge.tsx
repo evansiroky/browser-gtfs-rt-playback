@@ -38,7 +38,7 @@ export function SessionStatusBadge() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Badge variant="outline" className="cursor-default gap-1.5" data-phase={phase}>
+        <Badge variant="outline" tabIndex={0} className="cursor-default gap-1.5" data-phase={phase}>
           <span aria-hidden className={`size-2 rounded-full ${className}`} />
           {label}
         </Badge>

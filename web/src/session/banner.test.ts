@@ -36,6 +36,32 @@ describe('selectBanner', () => {
     });
   });
 
+  it('adds a note to the ended banner after a failed Restart, keeping ended on top', () => {
+    const ended = { phase: 'ended', status: dormantStatus('max-duration') } as const;
+    expect(selectBanner(session({ ...ended, error: null, restartFailed: false }), NOW)?.note).toBe(
+      undefined,
+    );
+    const down = selectBanner(
+      session({ ...ended, error: new ApiError('network', 'x'), restartFailed: true }),
+      NOW,
+    );
+    expect(down).toMatchObject({
+      id: 'ended',
+      note: "Restart failed — can't reach the server. Try again.",
+      action: { kind: 'restart' },
+    });
+    expect(
+      selectBanner(
+        session({
+          ...ended,
+          error: new ApiError('http', 'Too many requests.', { status: 429 }),
+          restartFailed: true,
+        }),
+        NOW,
+      )?.note,
+    ).toBe('Restart failed — Too many requests. Try again.');
+  });
+
   it('puts ended ahead of a pause, and a pause ahead of every other banner', () => {
     const failing = activeStatus({ schedule: { state: 'failed', loadedAt: null, error: null } });
     const down = new ApiError('network', 'x');
@@ -52,6 +78,7 @@ describe('selectBanner', () => {
       new ApiError('network', 'x'),
       new ApiError('http', 'x', { status: 502 }),
       new ApiError('http', 'x', { status: 500, code: 'internal_error' }),
+      new ApiError('parse', 'Response was not the expected shape'),
     ]) {
       expect(selectBanner(session({ error }), NOW)).toMatchObject({
         id: 'unreachable',

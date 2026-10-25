@@ -27,13 +27,19 @@ export function SessionBannerView({
   const Icon = ICONS[banner.id];
   return (
     <Alert
+      // Errors interrupt (assertive role="alert"); paused, loading and stale notices are polite.
+      role={banner.tone === 'error' ? 'alert' : 'status'}
       variant={banner.tone === 'error' ? 'destructive' : 'default'}
       data-banner={banner.id}
-      aria-live="polite"
     >
       <Icon />
       <AlertTitle className="line-clamp-none">{banner.title}</AlertTitle>
-      {banner.description && <AlertDescription>{banner.description}</AlertDescription>}
+      {(banner.description || banner.note) && (
+        <AlertDescription>
+          {banner.description}
+          {banner.note && <span className="font-medium">{banner.note}</span>}
+        </AlertDescription>
+      )}
       {banner.action && (
         <div className="col-start-2 mt-2">
           <Button
@@ -51,8 +57,8 @@ export function SessionBannerView({
 
 /** The session banner for the current page, or nothing. */
 export function SessionBanner() {
-  const { phase, status, error, restart } = useSession();
+  const { phase, status, error, restartFailed, restart } = useSession();
   const now = useNowSeconds();
-  const banner = selectBanner({ phase, status, error }, now);
+  const banner = selectBanner({ phase, status, error, restartFailed }, now);
   return banner ? <SessionBannerView banner={banner} onAction={restart} /> : null;
 }

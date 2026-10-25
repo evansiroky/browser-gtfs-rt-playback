@@ -15,12 +15,22 @@ export interface BannerModel {
   tone: 'info' | 'error';
   title: string;
   description?: string;
+  /** Extra line shown under the description, for example why the last action failed. */
+  note?: string;
   /** Both actions call `POST /session/start`. */
   action?: { kind: 'restart' | 'retry'; label: string };
 }
 
 const RESUME_HINT =
   'Move the pointer, tap, or press a key to resume. Showing the last data received.';
+
+function restartFailedNote(error: Error | null): string {
+  const reason =
+    error instanceof ApiError && !error.isUnreachable
+      ? error.message.replace(/\.$/, '')
+      : "can't reach the server";
+  return `Restart failed — ${reason}. Try again.`;
+}
 
 function staleFeeds(status: NonNullable<ActivitySnapshot['status']>) {
   const feeds: [string, FeedStatus | null][] = [
@@ -36,10 +46,11 @@ function staleFeeds(status: NonNullable<ActivitySnapshot['status']>) {
  * clock, used only for the age of stale feeds.
  */
 export function selectBanner(
-  session: Pick<ActivitySnapshot, 'phase' | 'status' | 'error'>,
+  session: Pick<ActivitySnapshot, 'phase' | 'status' | 'error'> &
+    Partial<Pick<ActivitySnapshot, 'restartFailed'>>,
   nowSeconds: number,
 ): BannerModel | null {
-  const { phase, status, error } = session;
+  const { phase, status, error, restartFailed } = session;
 
   // An ended session outranks a pause: nothing can resume until Restart.
   if (phase === 'ended') {
@@ -48,6 +59,7 @@ export function selectBanner(
       tone: 'error',
       title: 'Session ended after the maximum running time.',
       description: 'The server has stopped and forgotten its data. Restart to begin a new session.',
+      note: restartFailed ? restartFailedNote(error) : undefined,
       action: { kind: 'restart', label: 'Restart' },
     };
   }

@@ -26,14 +26,14 @@ function renderState(
 describe('SessionBannerView', () => {
   it('paused (tab hidden)', () => {
     renderState('paused-hidden', activeStatus());
-    expect(screen.getByRole('alert')).toHaveTextContent('Paused — tab hidden');
-    expect(screen.getByRole('alert')).toHaveTextContent(/press a key to resume/);
+    expect(screen.getByRole('status')).toHaveTextContent('Paused — tab hidden');
+    expect(screen.getByRole('status')).toHaveTextContent(/press a key to resume/);
     expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('paused (idle)', () => {
     renderState('paused-idle', activeStatus());
-    expect(screen.getByRole('alert')).toHaveTextContent('Paused — no activity for a minute');
+    expect(screen.getByRole('status')).toHaveTextContent('Paused — no activity for a minute');
     expect(screen.queryByRole('button')).toBeNull();
   });
 
@@ -57,7 +57,7 @@ describe('SessionBannerView', () => {
       'engaged',
       activeStatus({ schedule: { state: 'loading', loadedAt: null, error: null } }),
     );
-    expect(screen.getByRole('alert')).toHaveTextContent('Downloading the schedule…');
+    expect(screen.getByRole('status')).toHaveTextContent('Downloading the schedule…');
     expect(screen.queryByRole('button')).toBeNull();
   });
 
@@ -87,8 +87,91 @@ describe('SessionBannerView', () => {
         },
       }),
     );
-    expect(screen.getByRole('alert')).toHaveTextContent('Trip updates feed is stale.');
-    expect(screen.getByRole('alert')).toHaveTextContent('last successful update');
+    expect(screen.getByRole('status')).toHaveTextContent('Trip updates feed is stale.');
+    expect(screen.getByRole('status')).toHaveTextContent('last successful update');
+  });
+});
+
+describe('live-region semantics', () => {
+  const role = (banner: ReturnType<typeof selectBanner>) => {
+    if (!banner) throw new Error('expected a banner');
+    const { unmount } = render(<SessionBannerView banner={banner} onAction={() => {}} />);
+    const element = document.querySelector('[data-banner]')!;
+    const result = {
+      role: element.getAttribute('role'),
+      ariaLive: element.getAttribute('aria-live'),
+    };
+    unmount();
+    return result;
+  };
+  const stale = activeStatus({
+    realtime: { vehiclePositions: feed({ stale: true }), tripUpdates: null },
+  });
+  const failed = activeStatus({
+    schedule: { state: 'failed', loadedAt: null, error: null },
+  });
+  const loading = activeStatus({ schedule: { state: 'loading', loadedAt: null, error: null } });
+
+  it('errors are assertive alerts', () => {
+    const down = new ApiError('network', 'x');
+    expect(role(selectBanner({ phase: 'engaged', status: failed, error: null }, NOW))).toEqual({
+      role: 'alert',
+      ariaLive: null,
+    });
+    expect(
+      role(selectBanner({ phase: 'engaged', status: activeStatus(), error: down }, NOW)),
+    ).toEqual({
+      role: 'alert',
+      ariaLive: null,
+    });
+    expect(
+      role(
+        selectBanner({ phase: 'ended', status: dormantStatus('max-duration'), error: null }, NOW),
+      ),
+    ).toEqual({ role: 'alert', ariaLive: null });
+  });
+
+  it('paused, loading and stale notices are polite status regions, not alerts', () => {
+    for (const banner of [
+      selectBanner({ phase: 'paused-idle', status: activeStatus(), error: null }, NOW),
+      selectBanner({ phase: 'paused-hidden', status: activeStatus(), error: null }, NOW),
+      selectBanner({ phase: 'engaged', status: loading, error: null }, NOW),
+      selectBanner({ phase: 'engaged', status: stale, error: null }, NOW),
+    ]) {
+      expect(role(banner)).toEqual({ role: 'status', ariaLive: null });
+    }
+  });
+});
+
+describe('failed Restart feedback', () => {
+  it('shows the note inside the ended banner and clears it on the next attempt', async () => {
+    const clock = new FakeClock();
+    const pending: { resolve: (s: SessionStatus) => void; reject: (e: unknown) => void }[] = [];
+    const next = () =>
+      new Promise<SessionStatus>((resolve, reject) => pending.push({ resolve, reject }));
+    const controller = new ActivityController({ clock, api: { start: next, ping: next } });
+
+    render(
+      <SessionProvider controller={controller}>
+        <SessionBanner />
+      </SessionProvider>,
+    );
+    pending[0]!.resolve(dormantStatus('max-duration'));
+    await screen.findByRole('alert');
+    expect(screen.queryByText(/Restart failed/)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    pending[1]!.reject(new ApiError('network', 'down'));
+    expect(
+      await screen.findByText("Restart failed — can't reach the server. Try again."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Session ended');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    expect(screen.queryByText(/Restart failed/)).toBeNull();
+    pending[2]!.resolve(activeStatus());
+    await flush();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
