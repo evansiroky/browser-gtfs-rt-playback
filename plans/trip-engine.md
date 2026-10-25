@@ -62,7 +62,12 @@ eviction (`historyStartsAt`), and are forgotten on dormancy.
    `routes.txt`, expecting `routeShortName`/`routeLongName` looked up from it (the existing
    ghost trip uses a route that is not in `routes.txt`, expecting null names). The oracle's
    independent reviewer flagged that this case is currently unpinned.
-9. Performance test: 100k-trip synthetic schedule — lists computed in a few hundred ms.
+9. Pin the `unusable_stop_times` configuration error (spec: trip-activity.md "Configuration
+   errors"): add to the [`test-fixtures`](test-fixtures.md) scenario (and `expected`/oracle) a
+   trip with no stop_times rows and a trip whose last stop has neither time, each producing no
+   entries, listed in `configurationErrors`, and (when referenced) in list 3 as
+   `configuration_error`; the independent oracle reviewer re-verifies the fixtures afterwards.
+10. Performance test: 100k-trip synthetic schedule — lists computed in a few hundred ms.
 
 ## Validation
 - [ ] `npm run lint`, `typecheck`, `test`, `build` pass.

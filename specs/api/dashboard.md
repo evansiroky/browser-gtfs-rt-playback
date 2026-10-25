@@ -25,7 +25,7 @@ lists: {                                            // null until the schedule i
 } | null
 configurationErrors: {                              // null until the schedule is ready
   total: integer
-  items: [{ code: "mixed_exact_times", tripId: string, message: string }]   // first 100
+  items: [{ code: "mixed_exact_times" | "unusable_stop_times", tripId: string, message: string }]   // first 100
 } | null
 ```
 Definitions of each figure are in [trip-activity](../behaviors/trip-activity.md#statistics).

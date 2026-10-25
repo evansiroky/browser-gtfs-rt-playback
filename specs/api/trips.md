@@ -88,7 +88,7 @@ scheduled: {                                         // null when the trip ID is
     activeNow:   boolean
     activeInstanceStarts: epoch seconds[]            // nominal instances overlapping now; empty if misconfigured
   }] | null
-  configurationErrors: [{ code: "mixed_exact_times", message: string }]   // empty when none
+  configurationErrors: [{ code: "mixed_exact_times" | "unusable_stop_times", message: string }]   // empty when none
 } | null
 realtime: {
   pings: [{                                         // ascending by sequence; retained window only
