@@ -36,6 +36,10 @@ configured URL is not `https` or `http`.
 | Realtime history memory limit | 512 MiB | data-retention |
 | API rate limit | 120 requests/min per client address | [api/conventions](../api/conventions.md) |
 
+Every tunable is a positive whole number (or on/off), and the realtime history memory limit
+must hold at least two maximum-size realtime responses (so each feed's latest snapshot always
+fits); the server refuses to start otherwise. Error messages name the setting, never its value.
+
 The retention default is also a ceiling: configuration may lower it but the server clamps
 any value above 60 minutes to 60 ([Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience)).
 
