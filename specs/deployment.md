@@ -36,7 +36,7 @@ no keys are stored in GitHub.
 
 | Identity | Created by | Capability | Reachable from |
 |---|---|---|---|
-| plan | bootstrap | read project state; lock Terraform state | infra workflow, pull requests |
+| plan | bootstrap | read project state and the billing budget; write Terraform lock objects only | infra workflow, pull requests |
 | apply | bootstrap | manage the resources in infrastructure.md | infra workflow, `main` |
 | deploy | Terraform | push images to the one registry; update the one Cloud Run service; act as the runtime service account — nothing else | deploy workflow, `main` |
 

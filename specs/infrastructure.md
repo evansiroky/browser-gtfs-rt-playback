@@ -58,7 +58,9 @@ nothing that exists. It:
    each identity below can be impersonated only by one workflow on one ref (or by pull
    requests). No service account keys are ever created.
 5. Creates two Terraform identities and binds them: a **plan** identity, read-only apart
-   from the state lock, impersonable only by the infrastructure workflow on pull requests;
+   from the state lock — it can read project state and the billing budget, and its only write
+   access in the state bucket is to Terraform lock objects — impersonable only by the
+   infrastructure workflow on pull requests;
    and an **apply** identity with the roles to manage the resources above, impersonable only
    by the infrastructure workflow on `main`. The apply identity is also given the narrow
    permission to manage budgets on the project's billing account, if the operator running the
@@ -102,6 +104,15 @@ error. It:
   — feed URLs are secrets and stay out of state, variables, and logs.
 
 **Local**
+- **Never adopt what you did not create.** Bootstrap labels the state bucket only when it
+  creates it (or finds it empty, as after an interrupted run); a non-empty bucket without the
+  label is someone else's and is refused, because the label is what authorizes teardown to
+  delete it. Likewise an existing identity provider that does not match the contract is
+  refused, never silently reused.
+- **The plan identity can read the budget, and therefore the account's spend.** Planning
+  the billing budget requires billing-account viewer access, which also exposes spend
+  information for the whole billing account to anything running as the plan identity. This is
+  accepted: a billing account dedicated to this project keeps the exposure harmless.
 - **No long-lived credentials.** CI authenticates through Workload Identity Federation only;
   creating a service account key is never the answer, in scripts or Terraform.
 - **Least privilege per workflow.** A pull request can only plan; only `main` can apply or
