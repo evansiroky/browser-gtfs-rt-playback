@@ -390,7 +390,11 @@ test_bootstrap_bucket_name_taken_elsewhere() {
   mkdir -p "$S/foreign/$BUCKET"
   invoke bootstrap.sh --project "$PROJECT" --repo "$REPO"
   assert_rc 1
-  assert_out "is it taken by another project?"
+  assert_out "error: could not create gs://$BUCKET (bucket names are global: is it taken by another project?)"
+  # Bootstrap stops at the failed create: it never labels or grants anything on that name.
+  [[ $(grep '^mutate ' "$LOG" | tail -n 1) == *"storage buckets create gs://$BUCKET"* ]] ||
+    fail "bootstrap kept going after the bucket could not be created"
+  assert_not_called "storage buckets update"
   assert_not_called "workload-identity-pools create"
 }
 
