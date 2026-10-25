@@ -136,8 +136,12 @@ terraform_destroy() {
     log "skipped (--skip-terraform)"
     return 0
   fi
-  if ! bucket_in_project; then
+  if ! storage_present || ! bucket_in_project; then
     warn "state bucket gs://$STATE_BUCKET does not exist, so there is no Terraform state to destroy from; Terraform-managed resources still in the project must be removed by hand (or with --delete-project)"
+    return 0
+  fi
+  if ! bucket_has_label; then
+    warn "gs://$STATE_BUCKET does not carry the label $BOOTSTRAP_LABEL_KEY=$BOOTSTRAP_LABEL_VALUE, so it is not bootstrap's state bucket; not running Terraform against it"
     return 0
   fi
   [[ -d $INFRA_DIR ]] ||
@@ -161,29 +165,66 @@ terraform_destroy() {
   run terraform -chdir="$INFRA_DIR" destroy -input=false -auto-approve
 }
 
-# remove_member_bindings <rows> <member> <remove-iam-policy-binding command...>:
-# removes every binding of <member> listed in <rows>, whatever its role.
+# storage_present / iam_present: whether the project has the API enabled. Without it,
+# bootstrap never got as far as creating the bucket / identities and pool.
+storage_present() {
+  api_enabled storage.googleapis.com
+}
+
+iam_present() {
+  api_enabled iam.googleapis.com
+}
+
+# remove_member_bindings <rows> <member> <remove command...>: removes every binding of
+# <member> listed in <rows>, whatever its role or condition, including the
+# "deleted:<member>?uid=..." form a binding takes once its service account is deleted.
 remove_member_bindings() {
-  local rows=$1 member=$2 role row_member found=0
+  local rows=$1 member=$2 role row_member expression removed="" found=0
   shift 2
-  while IFS=$'\t' read -r -u 3 role row_member; do
-    [[ $row_member == "$member" ]] || continue
+  while IFS=$'\t' read -r -u 3 role row_member expression; do
+    if [[ $row_member != "$member" && $row_member != "deleted:$member?uid="* ]]; then
+      continue
+    fi
     found=1
-    run "$@" --member="$member" --role="$role"
+    # A role held more than once (conditional bindings) is removed by one --all call.
+    if grep -Fxq -- "$role $row_member" <<<"$removed"; then
+      continue
+    fi
+    removed+="$role $row_member"$'\n'
+    "$@" "$row_member" "$role"
   done 3<<<"$rows"
   if [[ $found == 0 ]]; then
     log "no bindings for $member"
   fi
 }
 
+# remove_project_binding <member> <role>: --all removes it whatever its condition.
+remove_project_binding() {
+  run gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$1" --role="$2" --all
+}
+
+# remove_billing_binding <member> <role>: a binding that is already gone is skipped;
+# any other failure stops teardown.
+remove_billing_binding() {
+  if run gcloud billing accounts remove-iam-policy-binding "$BILLING_ACCOUNT" \
+    --member="$1" --role="$2" 2>"$GCLOUD_ERR"; then
+    cat "$GCLOUD_ERR" >&2
+    return 0
+  fi
+  if grep -q 'not found' "$GCLOUD_ERR"; then
+    log "already removed: $2 -> $1"
+    return 0
+  fi
+  cat "$GCLOUD_ERR" >&2
+  die "could not remove $2 from $1 on billing account $BILLING_ACCOUNT"
+}
+
 remove_bindings() {
   step "IAM bindings of $PLAN_SA_ID and $APPLY_SA_ID"
   local rows
-  rows=$(iam_rows gcloud projects get-iam-policy "$PROJECT_ID") ||
-    die "could not read the IAM policy of '$PROJECT_ID'"
-  local project_remove=(gcloud projects remove-iam-policy-binding "$PROJECT_ID" --condition=None)
-  remove_member_bindings "$rows" "serviceAccount:$PLAN_SA_EMAIL" "${project_remove[@]}"
-  remove_member_bindings "$rows" "serviceAccount:$APPLY_SA_EMAIL" "${project_remove[@]}"
+  read_or_die rows iam_rows gcloud projects get-iam-policy "$PROJECT_ID"
+  remove_member_bindings "$rows" "serviceAccount:$PLAN_SA_EMAIL" remove_project_binding
+  remove_member_bindings "$rows" "serviceAccount:$APPLY_SA_EMAIL" remove_project_binding
 
   # Bindings on the identities and on the state bucket go away with those resources.
   if [[ -z $BILLING_ACCOUNT ]]; then
@@ -199,13 +240,16 @@ remove_bindings() {
         --member="serviceAccount:$PLAN_SA_EMAIL" --role="$PLAN_BILLING_ROLE")" >&2
     return 0
   fi
-  local billing_remove=(gcloud billing accounts remove-iam-policy-binding "$BILLING_ACCOUNT")
-  remove_member_bindings "$rows" "serviceAccount:$PLAN_SA_EMAIL" "${billing_remove[@]}"
-  remove_member_bindings "$rows" "serviceAccount:$APPLY_SA_EMAIL" "${billing_remove[@]}"
+  remove_member_bindings "$rows" "serviceAccount:$PLAN_SA_EMAIL" remove_billing_binding
+  remove_member_bindings "$rows" "serviceAccount:$APPLY_SA_EMAIL" remove_billing_binding
 }
 
 delete_identities() {
   step "Terraform identities"
+  if ! iam_present; then
+    log "IAM API not enabled: no identities to remove"
+    return 0
+  fi
   local email
   for email in "$PLAN_SA_EMAIL" "$APPLY_SA_EMAIL"; do
     if service_account_exists "$email"; then
@@ -218,14 +262,20 @@ delete_identities() {
 
 delete_wif() {
   step "Workload Identity Federation provider '$WIF_PROVIDER_ID' and pool '$WIF_POOL_ID'"
-  case $(provider_state) in
+  if ! iam_present; then
+    log "IAM API not enabled: no pool or provider to remove"
+    return 0
+  fi
+  load_provider_state
+  case $PROVIDER_STATE in
     "" | DELETED) log "provider already gone" ;;
     *)
       run gcloud iam workload-identity-pools providers delete "$WIF_PROVIDER_ID" --project="$PROJECT_ID" \
         --location="$WIF_LOCATION" --workload-identity-pool="$WIF_POOL_ID"
       ;;
   esac
-  case $(pool_state) in
+  load_pool_state
+  case $POOL_STATE in
     "" | DELETED) log "pool already gone" ;;
     *)
       run gcloud iam workload-identity-pools delete "$WIF_POOL_ID" --project="$PROJECT_ID" \
@@ -234,9 +284,11 @@ delete_wif() {
   esac
 }
 
+# delete_state_bucket runs after every other removal has succeeded (any failure before it
+# stops the script), so the state is the last thing to go.
 delete_state_bucket() {
   step "Terraform state bucket gs://$STATE_BUCKET"
-  if ! bucket_in_project; then
+  if ! storage_present || ! bucket_in_project; then
     log "already gone"
     return 0
   fi
@@ -260,6 +312,7 @@ main() {
   parse_args "$@"
   validate_inputs
   require_gcloud
+  init_scratch
 
   step "Checking project $PROJECT_ID"
   load_project
@@ -269,6 +322,7 @@ main() {
   fi
   load_billing || warn "could not read the billing info of '$PROJECT_ID'; billing bindings will be left alone"
   derive_names
+  load_enabled_apis
   require_confirmation
 
   terraform_destroy
@@ -280,6 +334,8 @@ main() {
 
   if [[ $DRY_RUN == 1 ]]; then
     step "Dry run complete: nothing was changed"
+  elif [[ $WARNED == 1 ]]; then
+    step "Teardown complete, with the warnings above"
   else
     step "Teardown complete"
   fi

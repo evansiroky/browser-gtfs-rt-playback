@@ -54,8 +54,13 @@ APPLY_PROJECT_ROLES=(
   "roles/iam.serviceAccountUser"
   "roles/serviceusage.serviceUsageConsumer"
 )
-# Granted on the state bucket only, to both identities (state read/write and lock).
-readonly STATE_BUCKET_ROLE="roles/storage.objectAdmin"
+# State bucket grants. tf-apply reads and writes state. tf-plan reads state and may write
+# only Terraform lock objects ("<prefix>/<workspace>.tflock"), through a conditional binding.
+readonly APPLY_STATE_ROLE="roles/storage.objectAdmin"
+readonly PLAN_STATE_READ_ROLE="roles/storage.objectViewer"
+readonly PLAN_STATE_LOCK_ROLE="roles/storage.objectUser"
+readonly PLAN_STATE_LOCK_CONDITION_EXPRESSION='resource.name.endsWith(".tflock")'
+readonly PLAN_STATE_LOCK_CONDITION_TITLE="terraform-lock-objects"
 # Granted on the project's billing account, when the operator is able to grant them.
 readonly APPLY_BILLING_ROLE="roles/billing.costsManager"
 readonly PLAN_BILLING_ROLE="roles/billing.viewer"
@@ -148,7 +153,11 @@ require_gcloud() {
 
 log() { printf '%s\n' "$*"; }
 step() { printf '\n==> %s\n' "$*"; }
-warn() { printf 'warning: %s\n' "$*" >&2; }
+WARNED=0
+warn() {
+  WARNED=1
+  printf 'warning: %s\n' "$*" >&2
+}
 die() {
   printf 'error: %s\n' "$*" >&2
   exit 1
@@ -225,51 +234,130 @@ derive_names() {
 }
 
 # ---- Probes (read-only; never passed through run) --------------------------------
+#
+# A probe either answers or stops the script: only an explicit NOT_FOUND / 404 from
+# gcloud means "absent". Any other error (permission denied, network, quota) is fatal,
+# so a resource is never mistaken for missing (or for ours).
 
-# iam_rows <get-iam-policy command...>: prints one "role<TAB>member" line per binding
-# member.
+GCLOUD_ERR=""
+
+# init_scratch: a temporary file that captures gcloud's stderr, removed on exit.
+init_scratch() {
+  GCLOUD_ERR=$(mktemp "${TMPDIR:-/tmp}/gtfs-rt-debugger-gcloud.XXXXXX")
+  trap 'rm -f "$GCLOUD_ERR"' EXIT
+}
+
+# probe_failed <command...>: reports a failed read-only command and exits.
+probe_failed() {
+  cat "$GCLOUD_ERR" >&2
+  die "read-only check failed, stopping rather than guessing: $(shell_quote "$@")"
+}
+
+# lookup <var> <read-only command...>: stores the command's stdout in <var>. Returns 1
+# if gcloud says the resource does not exist; exits on any other failure.
+lookup() {
+  local __var=$1 __out __rc=0
+  shift
+  __out=$("$@" 2>"$GCLOUD_ERR") || __rc=$?
+  if [[ $__rc -ne 0 ]]; then
+    if grep -Eq 'NOT_FOUND|not found: 404|HTTPError 404' "$GCLOUD_ERR"; then
+      return 1
+    fi
+    probe_failed "$@"
+  fi
+  printf -v "$__var" '%s' "$__out"
+}
+
+# read_or_die <var> <read-only command...>: like lookup, but absence is fatal too.
+read_or_die() {
+  local __var=$1 __out
+  shift
+  __out=$("$@" 2>"$GCLOUD_ERR") || probe_failed "$@"
+  printf -v "$__var" '%s' "$__out"
+}
+
+# json_pairs: reads gcloud's `--format=json(<map>)` output on stdin and prints one
+# "key=value" line per string entry of the map.
+json_pairs() {
+  sed -n 's/^ *"\([^"]*\)": "\(.*\)",\{0,1\}$/\1=\2/p'
+}
+
+# iam_rows <get-iam-policy command...>: prints one "role<TAB>member<TAB>condition
+# expression" line per binding member (the expression is empty when unconditional).
 iam_rows() {
-  "$@" --flatten='bindings[].members' --format='value(bindings.role,bindings.members)'
+  "$@" --flatten='bindings[].members' \
+    --format='value(bindings.role,bindings.members,bindings.condition.expression)'
 }
 
-# has_binding <rows> <role> <member>
+# has_binding <rows> <role> <member> [<condition expression>]: whether <rows> holds
+# exactly that binding (unconditional unless an expression is given).
 has_binding() {
-  grep -Fxq -- "$2"$'\t'"$3" <<<"$1"
+  local role member expression
+  while IFS=$'\t' read -r role member expression; do
+    if [[ $role == "$2" && $member == "$3" && $expression == "${4:-}" ]]; then
+      return 0
+    fi
+  done <<<"$1"
+  return 1
 }
 
-# bucket_in_project: whether the state bucket exists in this project.
+# bucket_in_project: whether the state bucket exists in this project (a bucket of that
+# name in another project does not count).
 bucket_in_project() {
   local names
-  names=$(gcloud storage buckets list --project="$PROJECT_ID" --format='value(name)' 2>/dev/null) ||
-    die "could not list the Cloud Storage buckets of '$PROJECT_ID'"
+  read_or_die names gcloud storage buckets list --project="$PROJECT_ID" --format='value(name)'
   grep -Fxq -- "$STATE_BUCKET" <<<"$names"
 }
 
+# bucket_has_label: whether the state bucket carries exactly the bootstrap label.
 bucket_has_label() {
   local labels
-  labels=$(gcloud storage buckets describe "gs://$STATE_BUCKET" --format='json(labels)' 2>/dev/null) || return 1
-  grep -Fq -- "\"$BOOTSTRAP_LABEL_KEY\": \"$BOOTSTRAP_LABEL_VALUE\"" <<<"$labels"
+  read_or_die labels gcloud storage buckets describe "gs://$STATE_BUCKET" --format='json(labels)'
+  labels=$(json_pairs <<<"$labels")
+  grep -Fxq -- "$BOOTSTRAP_LABEL_KEY=$BOOTSTRAP_LABEL_VALUE" <<<"$labels"
 }
 
 bucket_versioning_enabled() {
   local enabled
-  enabled=$(gcloud storage buckets describe "gs://$STATE_BUCKET" --format='value(versioning_enabled)' 2>/dev/null) || return 1
+  read_or_die enabled gcloud storage buckets describe "gs://$STATE_BUCKET" --format='value(versioning_enabled)'
   [[ $enabled == True ]]
 }
 
+# bucket_is_empty: whether the state bucket holds no object, live or noncurrent.
+bucket_is_empty() {
+  local listing
+  read_or_die listing gcloud storage ls --all-versions "gs://$STATE_BUCKET"
+  [[ -z $listing ]]
+}
+
+ENABLED_APIS=""
+
+# load_enabled_apis: records which APIs the project had enabled when the script started.
+load_enabled_apis() {
+  read_or_die ENABLED_APIS gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)'
+}
+
+api_enabled() {
+  grep -Fxq -- "$1" <<<"$ENABLED_APIS"
+}
+
 service_account_exists() {
-  gcloud iam service-accounts describe "$1" --project="$PROJECT_ID" --format='value(email)' >/dev/null 2>&1
+  local email
+  lookup email gcloud iam service-accounts describe "$1" --project="$PROJECT_ID" --format='value(email)'
 }
 
-# pool_state / provider_state: print ACTIVE, DELETED (soft-deleted for 30 days), or
-# nothing when the resource does not exist.
-pool_state() {
-  gcloud iam workload-identity-pools describe "$WIF_POOL_ID" \
-    --project="$PROJECT_ID" --location="$WIF_LOCATION" --format='value(state)' 2>/dev/null || true
+# load_pool_state / load_provider_state: set POOL_STATE / PROVIDER_STATE to ACTIVE,
+# DELETED (soft-deleted for 30 days), or "" when the resource does not exist.
+POOL_STATE=""
+PROVIDER_STATE=""
+
+load_pool_state() {
+  lookup POOL_STATE gcloud iam workload-identity-pools describe "$WIF_POOL_ID" \
+    --project="$PROJECT_ID" --location="$WIF_LOCATION" --format='value(state)' || POOL_STATE=""
 }
 
-provider_state() {
-  gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER_ID" \
+load_provider_state() {
+  lookup PROVIDER_STATE gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER_ID" \
     --project="$PROJECT_ID" --location="$WIF_LOCATION" --workload-identity-pool="$WIF_POOL_ID" \
-    --format='value(state)' 2>/dev/null || true
+    --format='value(state)' || PROVIDER_STATE=""
 }
