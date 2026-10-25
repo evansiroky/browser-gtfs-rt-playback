@@ -11,12 +11,17 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   what the limit permits.
 - Only the data the rules need is kept ([Retain only what a screen shows](../principles.md#retain-only-what-a-screen-shows)):
   `agency.txt`; `routes.txt` (all columns); `trips.txt` (all columns); `calendar.txt` and
-  `calendar_dates.txt`; `frequencies.txt` (all columns); `shapes.txt` reduced to each shape's
-  ordered latitude/longitude points ([data-model](../data-model.md#shape)); and from
+  `calendar_dates.txt`; `frequencies.txt` (all columns); `shapes.txt` reduced to one encoded polyline per
+  shape ([data-model](../data-model.md#shape)); and from
   `stop_times.txt` only each trip's first and last stop time
   ([data-model](../data-model.md#scheduled-trip)). All other files and columns are
   discarded while streaming.
-- Geometry is stored compactly (for example as typed arrays), not as one object per point.
+- Shapes are **encoded while streaming**: each shape's points are ordered by
+  `shape_pt_sequence` and encoded to a precision-6 polyline, and the raw points are discarded
+  as soon as their shape is encoded, so only a single shape's raw points are ever held (a
+  file grouped by `shape_id` streams straight through; an ungrouped file is buffered per
+  shape, which counts toward the schedule memory limit). A point whose latitude or longitude
+  is not a number in range is skipped.
 - Decoded schedule data is bounded by the schedule memory limit; exceeding it aborts the
   load with a `too_large` error.
 - Missing required files (`agency.txt`, `routes.txt`, `trips.txt`, `stop_times.txt`, and at
@@ -61,4 +66,5 @@ Errors are reported as a code and a generic message (for example `http_status_40
 - [Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience) — one
   schedule download per activation, hard size and time limits, no queued fetches.
 - [Retain only what a screen shows](../principles.md#retain-only-what-a-screen-shows) —
-  stop times are reduced to first/last per trip and shapes to bare points while streaming.
+  stop times are reduced to first/last per trip and shapes to one encoded polyline each while
+  streaming.

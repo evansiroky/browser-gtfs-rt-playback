@@ -44,8 +44,8 @@ timestamp, delay, vehicle ID, schedule relationship, and the number of stop time
 Otherwise it says no trip update is currently present.
 
 **Map** — shown when the trip has a shape or at least one ping with coordinates.
-- The trip's **shape**, when it has one and the schedule contains it, is drawn as a line
-  under the markers. A trip with no `shape_id`, or whose shape is not in `shapes.txt`, has
+- The trip's **shape**, when it has one and the schedule contains it, is decoded in the
+  browser from its encoded polyline and drawn as a line under the markers. A trip with no `shape_id`, or whose shape is not in `shapes.txt`, has
   no line, and the page says which of the two applies.
 - One round marker per ping with coordinates, labeled with the ping's `sequence` number in
   small type. Pings of different vehicles remain individually identifiable by their popup

@@ -33,8 +33,10 @@ configuration error has none. Defined in
 [behaviors/trip-activity.md](behaviors/trip-activity.md#schedule-entries).
 
 ## Shape
-From `shapes.txt`: for each `shape_id`, the ordered sequence of (latitude, longitude) points
-by `shape_pt_sequence`. Other columns are not retained.
+From `shapes.txt`: for each `shape_id`, the points ordered by `shape_pt_sequence`, held
+**only as one encoded polyline** — the Google encoded polyline algorithm at precision 6
+(six decimal places, about 0.1 m). The raw coordinates are not retained after encoding, and the
+encoded string is exactly what the API sends. Other `shapes.txt` columns are not retained.
 
 ## Trip identity
 Everywhere the user sees, a trip is identified by its **trip ID** alone. Because the app

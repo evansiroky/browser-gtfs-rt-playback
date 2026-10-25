@@ -37,7 +37,8 @@ run (see [infrastructure.md](infrastructure.md)). State is process memory only â
 - **Web app:** React + Vite + TypeScript, **shadcn/ui** (with Tailwind CSS) for all UI
   components. Server state fetched with a data-fetching library that supports interval
   refetch and pausing when the tab is hidden.
-- **Map:** MapLibre GL JS with a keyless public vector-tile provider. The tile provider is a
+- **Map:** MapLibre GL JS with a keyless public vector-tile provider. Trip shapes arrive as
+  precision-6 encoded polylines and are decoded in the browser. The tile provider is a
   single configuration constant. Tiles are the only third-party request the browser makes.
 - **Tests:** Vitest for server and web logic; behaviors with a numeric or temporal rule
   (service-date resolution, active-trip window, dormancy timers) are unit-tested with an
