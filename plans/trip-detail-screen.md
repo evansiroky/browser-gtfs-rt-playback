@@ -32,7 +32,8 @@ pans; paused notice, not-found and session banners.
 
 ## Approach
 - `web/src/pages/TripDetail.tsx`, `TripMap.tsx` (MapLibre GL JS; style URL from a single constant
-  that tests can override; shape as a GeoJSON line source; markers as DOM markers or a symbol layer
+  that tests can override, defaulting to `https://tiles.openfreemap.org/styles/liberty` — the same
+  origin as the server's `TILE_HOST` setting, which the CSP allows; keep them in agreement; shape as a GeoJSON line source; markers as DOM markers or a symbol layer
   — pick whichever keeps clicks and numbering accessible), `PingsList.tsx`, `ScheduledTripCard.tsx`,
   `FrequencyTable.tsx`, `KeyValueTable.tsx`.
 - Use `decodePolyline6` from `shared`. Do not recompute ping numbers client-side.

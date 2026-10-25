@@ -32,7 +32,8 @@ Variables: `project_id`, `region` (default `us-west1`), `github_repository`, `wi
 (`projects/<number>/locations/global/workloadIdentityPools/github`), `billing_account`,
 `budget_amount` (default 25 USD), `manage_budget` (bool, default true), and the tunables from
 configuration.md (poll interval, idle timeout, max activation, retention, memory limits, rate
-limit) with the spec's defaults.
+limit) with the spec's defaults, plus `tile_host` (default `https://tiles.openfreemap.org`,
+passed to the service as `TILE_HOST` so the Content-Security-Policy allows the map's origin).
 
 Resources:
 1. `google_cloud_run_v2_service`: max instances 1, min 0, CPU always allocated
