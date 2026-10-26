@@ -44,8 +44,11 @@ Resources:
    `lifecycle { ignore_changes = [template[0].containers[0].image, client, client_version] }`.
 2. `google_cloud_run_v2_service_iam_member` `allUsers` → `roles/run.invoker`.
 3. Runtime SA with **no project roles**; `secretmanager.secretAccessor` on each secret only.
-4. Three `google_secret_manager_secret` (no versions — values are added by the operator, so they
-   never enter state): schedule, vehicle positions, trip updates. Document
+4. Three `google_secret_manager_secret` (schedule, vehicle positions, trip updates), each with a
+   `google_secret_manager_secret_version` holding only the PLACEHOLDER (`https://placeholder.invalid/set-me`;
+   Cloud Run cannot create a service whose secret has no version). Real URLs are added by the operator
+   as new versions out-of-band so they never enter state; Terraform must not manage or replace them
+   (`lifecycle { ignore_changes }` on the placeholder version's data). Document
    `gcloud secrets versions add …` in the README.
 5. `google_artifact_registry_repository` (docker, same region) with a cleanup policy keeping
    the most recent N (default 10) versions and deleting untagged older than 7 days.
