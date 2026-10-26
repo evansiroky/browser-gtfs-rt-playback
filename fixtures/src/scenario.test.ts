@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { TIMEZONE } from './catalog.js';
 import {
   REASON_ORDER,
+  type Expected,
   type ExpectedActiveRow,
   type ExpectedUnscheduledRow,
   type RealtimeInfo,
@@ -48,23 +49,28 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
     expect(expected.today).toBe('20261014');
     expect(expected.yesterday).toBe('20261013');
     expect(expected.stats).toEqual({
-      tripsToday: 46,
-      tripsActiveNow: 15,
-      vehicles: 35,
-      vehiclesWithTripId: 33,
-      tripUpdates: 8,
-      activeTripsWithRealtime: 8,
+      tripsToday: 136,
+      tripsActiveNow: 24,
+      vehicles: 45,
+      vehiclesWithTripId: 43,
+      tripUpdates: 10,
+      activeTripsWithRealtime: 13,
     });
   });
 
   it('list 1: active with realtime, by start then trip id', () => {
     expect(expected.lists.activeWithRealtime.map(active)).toEqual([
+      'plain-spans-two-days 20261014 00:00:00-16:00:00 VP/--',
       'plain-active-vp-tu 20261014 11:37:00-12:37:00 VP/TU',
       'freq-nominal 20261014 11:47:00-12:17:00 ~900 VP/--',
       'plain-active-vp 20261014 11:47:00-12:47:00 VP/--',
       'freq-exact 20261014 11:52:00-12:12:00 ~600x VP/--',
       'plain-active-added-service 20261014 11:52:00-12:32:00 VP/--',
+      'plain-active-start-times 20261014 11:52:00-12:42:00 VP/TU',
+      'plain-active-zero-timestamp 20261014 11:53:40-12:37:00 VP/TU',
+      'plain-active-no-timestamp 20261014 11:55:20-12:35:20 VP/--',
       'plain-active-tu 20261014 11:57:00-12:22:00 --/TU',
+      'plain-active-empty-route 20261014 11:58:40-12:38:40 VP/--',
       'freq-exact 20261014 12:02:00-12:22:00 ~600x --/TU',
       'freq-nominal 20261014 12:07:00-12:37:00 ~600 VP/--',
     ]);
@@ -74,10 +80,14 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
     expect(expected.lists.activeWithoutRealtime.map(active)).toEqual([
       'plain-active-no-rt 20261014 11:27:00-12:12:00',
       'edge-ends-this-minute 20261014 11:37:00-12:07:00',
+      'freq-overlapping-rows 20261014 11:50:00-12:10:00 ~600',
       'freq-nominal 20261014 11:57:00-12:27:00 ~600',
       'plain-ref-yesterday 20261014 11:57:00-12:27:00',
+      'freq-long-window 20261014 12:00:00-12:30:00 ~3600',
+      'freq-overlapping-rows 20261014 12:00:00-12:20:00 ~600',
       'plain-active-missing-shape 20261014 12:02:00-12:57:00',
       'plain-ref-tomorrow 20261014 12:02:00-12:32:00',
+      'plain-ref-two-dates 20261014 12:02:00-12:32:00',
       'edge-starts-this-minute 20261014 12:07:59-12:37:00',
     ]);
   });
@@ -92,6 +102,7 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
       'configuration_error cfg-last-stop-untimed 20261014 span=null VP/TU',
       'configuration_error cfg-mixed-and-no-stop-times 20261014 span=null VP/--',
       'configuration_error cfg-no-stop-times 20261014 span=null VP/--',
+      'configuration_error cfg-too-dense 20261014 start=12:07:00 span=null VP/--',
       'configuration_error freq-mixed 20261014 start=12:07:00 span=null VP/--',
       'configuration_error freq-mixed-removed-today 20261014 span=null VP/--',
       'not_in_service freq-nis 20261014 VP/--',
@@ -104,6 +115,8 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
       'unmatched_start_time freq-nominal 20261014 start=11:48:30 ~900 VP/--',
       'unmatched_start_time freq-nominal 20261014 start=11:58:30 ~600 VP/--',
       'outside_scheduled_time freq-exact 20261014 start=12:12:00 span=12:12:00-12:32:00 ~600 VP/--',
+      // the instance both rows produce, described by the first row
+      'outside_scheduled_time freq-overlapping-rows 20261014 start=09:00:00 span=09:00:00-09:20:00 ~600 VP/--',
       'outside_scheduled_time freq-overnight 20261014 start=23:10:00 span=23:10:00-23:30:00 ~600 VP/--',
       'outside_scheduled_time freq-overnight 20261014 start=24:10:00 span=00:10:00-00:30:00 ~600 VP/--',
       'outside_scheduled_time overnight-daily 20261014 span=23:30:00-01:30:00 VP/--',
@@ -111,6 +124,8 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
       'outside_scheduled_time plain-future 20261014 span=13:07:00-14:07:00 VP/--',
       'outside_scheduled_time plain-past 20261014 span=10:27:00-11:27:00 VP/TU',
       'outside_scheduled_time plain-ref-tomorrow 20261015 span=12:02:00-12:32:00 VP/--',
+      // two references, to yesterday and to tomorrow: one row, on the later date
+      'outside_scheduled_time plain-ref-two-dates 20261015 span=12:02:00-12:32:00 VP/--',
       'outside_scheduled_time plain-ref-yesterday 20261013 span=11:57:00-12:27:00 VP/--',
     ]);
   });
@@ -125,6 +140,7 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
       { code: 'unusable_stop_times', tripId: 'cfg-freq-first-stop-untimed' },
       { code: 'mixed_exact_times', tripId: 'cfg-mixed-and-no-stop-times' },
       { code: 'unusable_stop_times', tripId: 'cfg-mixed-and-no-stop-times' },
+      { code: 'frequency_too_dense', tripId: 'cfg-too-dense' },
     ]);
   });
 
@@ -191,6 +207,8 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
       ['cfg-last-stop-untimed', 'configuration_error', null, null],
       ['cfg-mixed-and-no-stop-times', 'configuration_error', null, null],
       ['cfg-no-stop-times', 'configuration_error', null, null],
+      // a row of one-second headways over a two-hour template: refused, not enumerated
+      ['cfg-too-dense', 'configuration_error', null, null],
     ]);
     const listed = [
       ...expected.lists.activeWithRealtime,
@@ -201,6 +219,61 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
     expect(expected.stats.tripsToday).toBe(
       at('20261014', '12:07:42', { includeMisconfiguredTrip: false }).expected.stats.tripsToday,
     );
+  });
+
+  it('identifies entries by trip, and for an instance by its start instant', () => {
+    const rows = [...expected.lists.activeWithRealtime, ...expected.lists.activeWithoutRealtime];
+    const of = (id: string) => rows.filter((r) => r.tripId === id);
+    // a 40 h plain trip runs on both candidate dates: one entry, on today's
+    expect(of('plain-spans-two-days').map((r) => r.serviceDate)).toEqual(['20261014']);
+    // two rows on one headway grid, windows 06:00-13:00 and 09:00-15:00: the instants 11:50 and
+    // 12:00 are each produced by both rows, and are one entry each
+    expect(of('freq-overlapping-rows').map((r) => r.scheduledStart)).toEqual([
+      Date.parse('2026-10-14T18:50:00Z') / 1000,
+      Date.parse('2026-10-14T19:00:00Z') / 1000,
+    ]);
+    // a window to 30:00:00: only today's 12:00 instance is running at midday
+    expect(of('freq-long-window')).toHaveLength(1);
+  });
+
+  it('shows the first start_time of the references behind a row, vehicle positions first', () => {
+    const row = expected.lists.activeWithRealtime.find(
+      (r) => r.tripId === 'plain-active-start-times',
+    )!;
+    expect(row.realtime).toMatchObject({
+      startTime: '10:00:00',
+      hasVehiclePosition: true,
+      hasTripUpdate: true,
+    });
+    expect(row.realtime!.vehicleIds).toHaveLength(2);
+  });
+
+  it('takes the route of the reference when trips.txt has an empty route_id', () => {
+    const row = expected.lists.activeWithRealtime.find(
+      (r) => r.tripId === 'plain-active-empty-route',
+    )!;
+    expect([row.routeId, row.routeShortName, row.routeLongName, row.headsign]).toEqual([
+      'R2',
+      '14',
+      'Mission',
+      'Daly City',
+    ]);
+  });
+
+  it('puts two references to other days than the active entry in one row, on the later date', () => {
+    const rows = expected.lists.unscheduledWithRealtime.filter(
+      (r) => r.tripId === 'plain-ref-two-dates',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      serviceDate: '20261015',
+      reason: 'outside_scheduled_time',
+      scheduledSpan: {
+        start: Date.parse('2026-10-15T19:02:00Z') / 1000,
+        end: Date.parse('2026-10-15T19:32:00Z') / 1000,
+      },
+    });
+    expect(rows[0]!.realtime.vehicleIds).toHaveLength(2);
   });
 
   it('pins what the spec says is null: unknown trips and configuration errors', () => {
@@ -241,8 +314,13 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
       Math.max(stamp('bus-101'), stamp('bus-102')),
     );
     expect(row('plain-active-vp', null).lastSeenAt).toBe(stamp('bus-103'));
-    expect(row('plain-active-tu', null).lastSeenAt).toBe(feed); // trip update only
-    expect(row('freq-exact', '12:02:00').lastSeenAt).toBe(feed);
+    // trip update only: the trip updates header, which trails the vehicle positions one by 3 s
+    expect(row('plain-active-tu', null).lastSeenAt).toBe(feed - 3);
+    expect(row('freq-exact', '12:02:00').lastSeenAt).toBe(feed - 3);
+    // a vehicle position with no timestamp, or a zero one, counts as having none: the vehicle
+    // positions header (the first reference's feed)
+    expect(row('plain-active-no-timestamp', null).lastSeenAt).toBe(feed);
+    expect(row('plain-active-zero-timestamp', null).lastSeenAt).toBe(feed);
     expect(feed - row('plain-active-vp', null).lastSeenAt).toBeGreaterThan(0);
   });
 
@@ -272,12 +350,12 @@ describe('scenario at 2026-10-14 00:20:00 (after midnight)', () => {
 
   it('counts', () => {
     expect(expected.stats).toEqual({
-      tripsToday: 41,
-      tripsActiveNow: 20,
-      vehicles: 34,
-      vehiclesWithTripId: 32,
-      tripUpdates: 7,
-      activeTripsWithRealtime: 11,
+      tripsToday: 131,
+      tripsActiveNow: 27,
+      vehicles: 44,
+      vehiclesWithTripId: 42,
+      tripUpdates: 9,
+      activeTripsWithRealtime: 16,
     });
   });
 
@@ -289,22 +367,30 @@ describe('scenario at 2026-10-14 00:20:00 (after midnight)', () => {
       'freq-nominal 20261014 00:00:00-00:30:00 ~900 VP/--',
       'plain-active-vp 20261014 00:00:00-01:00:00 VP/--',
       'plain-active-vp-tu 20261014 00:00:00-00:50:00 VP/TU',
+      'plain-spans-two-days 20261014 00:00:00-16:00:00 VP/--',
       'freq-exact 20261014 00:05:00-00:25:00 ~600x VP/--',
       'plain-active-added-service 20261014 00:05:00-00:45:00 VP/--',
+      'plain-active-start-times 20261014 00:05:00-00:55:00 VP/TU',
+      'plain-active-zero-timestamp 20261014 00:06:40-00:50:00 VP/TU',
+      'plain-active-no-timestamp 20261014 00:08:20-00:48:20 VP/--',
       // start_time "24:10:00", no start_date: the instance of YESTERDAY that starts at 00:10 today
       'freq-overnight 20261013 00:10:00-00:30:00 ~600 VP/--',
       'plain-active-tu 20261014 00:10:00-00:35:00 --/TU',
+      'plain-active-empty-route 20261014 00:11:40-00:51:40 VP/--',
       'freq-exact 20261014 00:15:00-00:35:00 ~600x --/TU',
       'freq-nominal 20261014 00:20:00-00:50:00 ~600 VP/--',
     ]);
     expect(expected.lists.activeWithoutRealtime.map(active)).toEqual([
       'edge-ends-this-minute 20261014 00:00:00-00:20:00',
+      // yesterday's 24:00:00 instance and today's 00:00:00 one are the same instant: one entry, today's
+      'freq-long-window 20261014 00:00:00-00:30:00 ~3600',
       'freq-overnight 20261013 00:00:00-00:20:00 ~600',
       'plain-active-no-rt 20261014 00:00:00-00:25:00',
       'freq-nominal 20261014 00:10:00-00:40:00 ~600',
       'plain-ref-yesterday 20261014 00:10:00-00:40:00',
       'plain-active-missing-shape 20261014 00:15:00-01:10:00',
       'plain-ref-tomorrow 20261014 00:15:00-00:45:00',
+      'plain-ref-two-dates 20261014 00:15:00-00:45:00',
       'freq-overnight 20261013 00:20:00-00:40:00 ~600',
       'edge-starts-this-minute 20261014 00:20:59-00:50:00',
     ]);
@@ -320,6 +406,7 @@ describe('scenario at 2026-10-14 00:20:00 (after midnight)', () => {
       'configuration_error cfg-last-stop-untimed 20261014 span=null VP/TU',
       'configuration_error cfg-mixed-and-no-stop-times 20261014 span=null VP/--',
       'configuration_error cfg-no-stop-times 20261014 span=null VP/--',
+      'configuration_error cfg-too-dense 20261014 start=00:20:00 span=null VP/--',
       'configuration_error freq-mixed 20261014 start=00:30:00 span=null VP/--',
       'configuration_error freq-mixed-removed-today 20261014 span=null VP/--',
       'not_in_service freq-nis 20261014 VP/--',
@@ -332,10 +419,12 @@ describe('scenario at 2026-10-14 00:20:00 (after midnight)', () => {
       'unmatched_start_time freq-nominal 20261014 start=00:01:30 ~900 VP/--',
       'unmatched_start_time freq-nominal 20261014 start=00:11:30 ~600 VP/--',
       'outside_scheduled_time freq-exact 20261014 start=00:25:00 span=00:25:00-00:45:00 ~600 VP/--',
+      'outside_scheduled_time freq-overlapping-rows 20261014 start=09:00:00 span=09:00:00-09:20:00 ~600 VP/--',
       // 23:10 names no instance that is active on either date: the later operating date, today
       'outside_scheduled_time freq-overnight 20261014 start=23:10:00 span=23:10:00-23:30:00 ~600 VP/--',
       'outside_scheduled_time plain-future 20261014 span=01:20:00-02:20:00 VP/--',
       'outside_scheduled_time plain-ref-tomorrow 20261015 span=00:15:00-00:45:00 VP/--',
+      'outside_scheduled_time plain-ref-two-dates 20261015 span=00:15:00-00:45:00 VP/--',
       'outside_scheduled_time plain-ref-yesterday 20261013 span=00:10:00-00:40:00 VP/--',
     ]);
   });
@@ -391,8 +480,11 @@ describe('daylight saving days', () => {
       rows.map((r) => r.replaceAll(from, to));
     expect(expected.stats).toEqual(reference.stats);
     for (const list of ['activeWithRealtime', 'activeWithoutRealtime'] as const) {
-      expect(normalize(expected.lists[list].map(active), expected.today, 'D')).toEqual(
-        normalize(reference.lists[list].map(active), reference.today, 'D'),
+      // plain-spans-two-days starts at the service day base, which is not midnight on these days
+      const rows = (e: Expected) =>
+        e.lists[list].filter((r) => r.tripId !== 'plain-spans-two-days');
+      expect(normalize(rows(expected).map(active), expected.today, 'D')).toEqual(
+        normalize(rows(reference).map(active), reference.today, 'D'),
       );
     }
   });
@@ -403,12 +495,17 @@ describe('options', () => {
     const full = at('20261014', '12:07:42');
     const without = at('20261014', '12:07:42', { includeMisconfiguredTrip: false });
     expect(without.expected.configurationErrors).toEqual([]);
-    expect(without.expected.stats.vehicles).toBe(full.expected.stats.vehicles - 6);
+    expect(without.expected.stats.vehicles).toBe(full.expected.stats.vehicles - 7);
     expect(without.expected.lists.unscheduledWithRealtime.map((r) => r.reason)).not.toContain(
       'configuration_error',
     );
     const ids = without.schedule.trips.map((t) => t.row.trip_id);
-    for (const id of ['freq-mixed', 'freq-mixed-removed-today', 'cfg-no-stop-times'])
+    for (const id of [
+      'freq-mixed',
+      'freq-mixed-removed-today',
+      'cfg-no-stop-times',
+      'cfg-too-dense',
+    ])
       expect(ids).not.toContain(id);
     expect(ids.some((id) => id!.startsWith('cfg-'))).toBe(false);
     expect(without.expected.stats.tripsToday).toBe(full.expected.stats.tripsToday);

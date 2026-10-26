@@ -77,19 +77,36 @@ are always nominal (`S, S+H, ...` while `< E`), `exact_times` never changes that
 | `freq-mixed-removed-today` | 15 min                      | on `REMOVED_TODAY`: row 1 `exact_times=1`, row 2 absent                                                                            | **none** (configuration error)                                                                                      | none                                                                                                                                |
 | `freq-nis`                 | 15 min                      | on `OFFDAY`: one valid row, 06:00-08:00, H = 15 min                                                                                | none (does not operate today)                                                                                       | none                                                                                                                                |
 
-### Trips without usable stop times (`unusable_stop_times`)
+### Entry identity and what references disagree on
+
+A plain trip is one entry; an instance is identified by its start instant (trip-activity, Schedule
+entries). These trips pin the rule and the choices the lists make when references disagree.
+
+| trip_id                       | Schedule                                                                      | Realtime                                                                | Result and why                                                                                                                                                                                                                                                             |
+| ----------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plain-spans-two-days`        | `DAILY`, `00:00:00`-`40:00:00`                                                | VP, no date                                                             | **List 1**, once, on today (yesterday's run is the same trip): the later date. Counted once in "scheduled today".                                                                                                                                                          |
+| `freq-overlapping-rows`       | rows 06:00-13:00 and 09:00-15:00, both H = 10 min, `exact_times` `0` / absent | VP dated today, start_time `09:00:00`                                   | Instants from 09:00 to 12:50 are produced by both rows: one entry each, described by the first. Scheduled today: 42 + 36 - 24 = **54**. Active at 12:07: 11:50 and 12:00, **list 2**. The reference is `outside_scheduled_time`, 09:00-09:20, `frequency` = the first row. |
+| `freq-long-window`            | one row 00:00-30:00, H = 1 h, 30-minute template                              | none                                                                    | 30 instances today. Yesterday's 24:00:00-29:00:00 instances start at the same instants as today's 00:00:00-05:00:00: at 00:20 the 00:00 instance is one entry, on today. At 12:07 only 12:00 is running. **List 2.**                                                       |
+| `plain-ref-two-dates`         | active now                                                                    | VP dated yesterday, VP dated tomorrow                                   | **List 2** (no reference is for today) and **one list 3 row**, `outside_scheduled_time`, on the later date (`20261015`), `vehicleIds` of both vehicles.                                                                                                                    |
+| `plain-active-start-times`    | active now                                                                    | VP start_time `10:00:00`, VP `11:00:00`, TU `12:00:00`, all dated today | **List 1.** A plain entry ignores `start_time`; the row shows the first, vehicle positions before trip updates: `10:00:00`.                                                                                                                                                |
+| `plain-active-no-timestamp`   | active now                                                                    | VP without a `timestamp`                                                | **List 1**, `lastSeenAt` = the vehicle positions header timestamp.                                                                                                                                                                                                         |
+| `plain-active-zero-timestamp` | active now                                                                    | VP with `timestamp` 0, and a TU                                         | **List 1**; 0 is no timestamp, so `lastSeenAt` is the header of the first reference's feed (vehicle positions, not the trip updates one, which trails by 3 s).                                                                                                             |
+| `plain-active-empty-route`    | active now, `route_id` empty in `trips.txt`                                   | VP with `route_id` `R2`                                                 | **List 1**; the empty `route_id` is none, so the reference's route is used: `R2`, `14`, `Mission`.                                                                                                                                                                         |
+
+### Trips without usable stop times (`unusable_stop_times`) and too dense rows
 
 Present unless `includeMisconfiguredTrip` is false. The span of each cannot be computed, so none has
 entries: not counted, not active, not in lists 1 or 2, listed in `configurationErrors`, and a
 reference to it is in list 3 with the reason `configuration_error`, `frequency` and span null. Each
 sits on `DAILY` and would be active now if its missing times were read as zero or ignored.
 
-| trip_id                       | Stop times                                                   | Frequency rows                                                     | Realtime                                                                            |
-| ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `cfg-no-stop-times`           | **no rows**                                                  | none                                                               | VP dated today                                                                      |
-| `cfg-last-stop-untimed`       | `00:00:00` to `24:00:00`, the **last stop has neither time** | none                                                               | VP, no date, and a TU (`VP/TU` in one row)                                          |
-| `cfg-freq-first-stop-untimed` | 20 min template, the **first stop has neither time**         | one row, `exact_times=0`, H = 10 min, window `00:00:00`-`26:00:00` | VP with the `start_time` of the current 10-minute mark (inside the window), no date |
-| `cfg-mixed-and-no-stop-times` | **no rows**                                                  | `exact_times` `1` (00:00-12:00) and absent (12:00-26:00)           | VP dated today; recorded under **both** codes, `mixed_exact_times` first            |
+| trip_id                       | Stop times                                                   | Frequency rows                                                     | Realtime                                                                                        |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `cfg-no-stop-times`           | **no rows**                                                  | none                                                               | VP dated today                                                                                  |
+| `cfg-last-stop-untimed`       | `00:00:00` to `24:00:00`, the **last stop has neither time** | none                                                               | VP, no date, and a TU (`VP/TU` in one row)                                                      |
+| `cfg-freq-first-stop-untimed` | 20 min template, the **first stop has neither time**         | one row, `exact_times=0`, H = 10 min, window `00:00:00`-`26:00:00` | VP with the `start_time` of the current 10-minute mark (inside the window), no date             |
+| `cfg-mixed-and-no-stop-times` | **no rows**                                                  | `exact_times` `1` (00:00-12:00) and absent (12:00-26:00)           | VP dated today; recorded under **both** codes, `mixed_exact_times` first                        |
+| `cfg-too-dense`               | 2-hour template                                              | one row, `exact_times=0`, H = 1 s, window `00:00:00`-`26:00:00`    | VP dated today; `frequency_too_dense` (ceil((7200 + 60) / 1) = 7260 is above 2,000): no entries |
 
 `freq-nominal`'s rows are `0` and absent, which are equal: not an error. The mixed trips' are `1` and
 absent (`0`): a **configuration error**, so they have no entries; they are not counted, not active,
@@ -128,38 +145,45 @@ not in lists 1 or 2.
 
 Counts
 
-- **tripsToday = 46**: plain trips operating today, each once: `plain-active-vp-tu`, `plain-active-vp`,
+- **tripsToday = 136**: plain trips operating today, each once: `plain-active-vp-tu`, `plain-active-vp`,
   `plain-active-tu`, `plain-active-no-rt`, `plain-active-missing-shape`, `plain-future`, `plain-past`
   (7), the four `edge-*` (11), `plain-ref-yesterday`, `plain-ref-tomorrow` (13),
   `plain-active-added-service` (14), `overnight-daily` (15); plus `freq-exact` 11, `freq-nominal` 8 and
-  `freq-overnight` 12 = **46**. Not counted: `plain-nis-*` and `freq-nis` (do not operate),
-  `overnight-from-yesterday` (operates only yesterday), the two mixed trips and the four `cfg-` trips
+  `freq-overnight` 12 = **46**, plus the entry-identity trips: `plain-spans-two-days` 1,
+  `freq-overlapping-rows` 54, `freq-long-window` 30, `plain-ref-two-dates`, `plain-active-start-times`,
+  `plain-active-no-timestamp`, `plain-active-zero-timestamp`, `plain-active-empty-route` 1 each = **136**. Not counted: `plain-nis-*` and `freq-nis` (do not operate),
+  `overnight-from-yesterday` (operates only yesterday), the two mixed trips and the five `cfg-` trips
   (no entries).
-- **tripsActiveNow = 15**: list 1 has 8, list 2 has 7.
-- **vehicles = 35**, **vehiclesWithTripId = 33** (all but the two without a trip ID), **tripUpdates = 8**
+- **tripsActiveNow = 24**: list 1 has 13, list 2 has 11.
+- **vehicles = 45**, **vehiclesWithTripId = 43** (all but the two without a trip ID), **tripUpdates = 10**
   (`plain-active-vp-tu`, `plain-active-tu`, `plain-past`, `freq-exact` 12:02, `freq-nominal`,
-  `ghost-tu-trip`, `ghost-known-route-tu-trip`, `cfg-last-stop-untimed`), **activeTripsWithRealtime = 8**.
+  `ghost-tu-trip`, `ghost-known-route-tu-trip`, `cfg-last-stop-untimed`, `plain-active-start-times`,
+  `plain-active-zero-timestamp`), **activeTripsWithRealtime = 13**.
 - Configuration errors, in `trips.txt` order (a trip with both codes is listed under both, mixed
   first): `freq-mixed` and `freq-mixed-removed-today` (`mixed_exact_times`), `cfg-no-stop-times`,
   `cfg-last-stop-untimed`, `cfg-freq-first-stop-untimed` (`unusable_stop_times`),
-  `cfg-mixed-and-no-stop-times` (`mixed_exact_times`, then `unusable_stop_times`): 7 errors, 6 trips.
+  `cfg-mixed-and-no-stop-times` (`mixed_exact_times`, then `unusable_stop_times`), `cfg-too-dense`
+  (`frequency_too_dense`): 8 errors, 7 trips.
 
 Lists, in the spec's order (by start then trip ID; by reason, then trip ID, then start); list 3 has
-28 rows.
+31 rows.
 
-1. `plain-active-vp-tu` 11:37; `freq-nominal` 11:47; `plain-active-vp` 11:47; `freq-exact` 11:52;
-   `plain-active-added-service` 11:52; `plain-active-tu` 11:57; `freq-exact` 12:02; `freq-nominal` 12:07.
-2. `plain-active-no-rt` 11:27; `edge-ends-this-minute` 11:37; `freq-nominal` 11:57;
-   `plain-ref-yesterday` 11:57; `plain-active-missing-shape` 12:02; `plain-ref-tomorrow` 12:02;
+1. `plain-spans-two-days` 00:00; `plain-active-vp-tu` 11:37; `freq-nominal` 11:47; `plain-active-vp` 11:47;
+   `freq-exact` 11:52; `plain-active-added-service` 11:52; `plain-active-start-times` 11:52;
+   `plain-active-zero-timestamp` 11:53:40; `plain-active-no-timestamp` 11:55:20; `plain-active-tu` 11:57;
+   `plain-active-empty-route` 11:58:40; `freq-exact` 12:02; `freq-nominal` 12:07.
+2. `plain-active-no-rt` 11:27; `edge-ends-this-minute` 11:37; `freq-overlapping-rows` 11:50;
+   `freq-nominal` 11:57; `plain-ref-yesterday` 11:57; `freq-long-window` 12:00; `freq-overlapping-rows` 12:00;
+   `plain-active-missing-shape` 12:02; `plain-ref-tomorrow` 12:02; `plain-ref-two-dates` 12:02;
    `edge-starts-this-minute` 12:07:59.
 3. `unknown_trip`: `ghost-known-route-tu-trip`, `ghost-known-route-vp-trip`, `ghost-tu-trip`,
    `ghost-vp-trip` / `configuration_error`: `cfg-freq-first-stop-untimed`, `cfg-last-stop-untimed`,
-   `cfg-mixed-and-no-stop-times`, `cfg-no-stop-times`, `freq-mixed`, `freq-mixed-removed-today` / `not_in_service`: `freq-nis` (no start), `freq-nis` (03:33:33),
+   `cfg-mixed-and-no-stop-times`, `cfg-no-stop-times`, `cfg-too-dense`, `freq-mixed`, `freq-mixed-removed-today` / `not_in_service`: `freq-nis` (no start), `freq-nis` (03:33:33),
    `plain-nis-off-weekday`, `plain-nis-removed-today` / `missing_start_time`: `freq-nominal` /
    `unmatched_start_time`: `freq-exact` (11:53:30), `freq-exact` (13:22:00), `freq-nominal`
    (11:48:30), `freq-nominal` (11:58:30) / `outside_scheduled_time`: `freq-exact` (12:12:00),
-   `freq-overnight` (23:10:00), `freq-overnight` (24:10:00), `overnight-daily`, `overnight-from-yesterday`, `plain-future`, `plain-past`,
-   `plain-ref-tomorrow`, `plain-ref-yesterday`.
+   `freq-overlapping-rows` (09:00:00), `freq-overnight` (23:10:00), `freq-overnight` (24:10:00), `overnight-daily`, `overnight-from-yesterday`, `plain-future`, `plain-past`,
+   `plain-ref-tomorrow`, `plain-ref-two-dates` (on the later date), `plain-ref-yesterday`.
 
 ## After midnight
 
@@ -189,8 +213,8 @@ Everything else shifts to fit the 20 minutes of today that exist:
   late-start reference is 00:06:30; the `outside` instance is 00:25; the window end is 01:35).
   `freq-nominal` row A covers 00:00-00:10 (one instance, 00:00); row B 00:10-01:00 (00:10 and 00:20
   are active); `freq-mixed` anchors at 00:30.
-- tripsToday = 41, tripsActiveNow = 20 (list 1: 11, list 2: 9), vehicles 34, vehiclesWithTripId 32,
-  tripUpdates 7; list 3 has 24 rows (no `overnight-*`, no `plain-past`, no `freq-overnight` 24:10:00;
+- tripsToday = 131, tripsActiveNow = 27 (list 1: 16, list 2: 11), vehicles 44, vehiclesWithTripId 42,
+  tripUpdates 9; list 3 has 27 rows (no `overnight-*`, no `plain-past`, no `freq-overnight` 24:10:00;
   its 23:10:00 reference stays).
 
 The test file pins all three lists. Between 01:30 and 02:00 (the overnight trips over, today's trips

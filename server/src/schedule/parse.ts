@@ -6,6 +6,7 @@ import type { LoadGuard } from './guard.js';
 import type { MemoryBudget } from './memory.js';
 import { rowBytes, stringBytes } from './memory.js';
 import { MemoryScheduleStore } from './memory-store.js';
+import { readFrequencyRow, tooDense } from './frequency.js';
 import { encodeShapes } from './shapes.js';
 import type { Row, ScheduleConfigurationError, ScheduleStore, TripTemplate } from './store.js';
 import { parseGtfsTime } from './time.js';
@@ -188,7 +189,8 @@ async function readFrequencies(
 
 /**
  * The configuration errors of the trips (trip-activity.md "Schedule entries"), in `trips.txt`
- * order, a trip with both problems under both codes (`mixed_exact_times` first).
+ * order, a trip with several problems under each code in this order: `mixed_exact_times`,
+ * `unusable_stop_times`, `frequency_too_dense`.
  */
 function configurationErrors(trips: Iterable<MutableTrip>): ScheduleConfigurationError[] {
   const errors: ScheduleConfigurationError[] = [];
@@ -198,6 +200,19 @@ function configurationErrors(trips: Iterable<MutableTrip>): ScheduleConfiguratio
       if (values.size > 1) errors.push({ code: 'mixed_exact_times', tripId: trip.id });
     }
     if (trip.template === null) errors.push({ code: 'unusable_stop_times', tripId: trip.id });
+    else if (trip.frequencies.length > 0) {
+      const duration = trip.template.endSecs - trip.template.startSecs;
+      const dense = trip.frequencies.some((row) => {
+        const { startSecs, endSecs, headwaySecs } = readFrequencyRow(row);
+        return (
+          startSecs !== null &&
+          endSecs !== null &&
+          headwaySecs !== null &&
+          tooDense(duration, headwaySecs)
+        );
+      });
+      if (dense) errors.push({ code: 'frequency_too_dense', tripId: trip.id });
+    }
   }
   return errors;
 }

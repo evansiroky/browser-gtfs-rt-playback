@@ -28,6 +28,8 @@ export interface VehicleSpec {
   lagSecs: number;
   occupancy: bindings.transit_realtime.VehiclePosition.OccupancyStatus;
   occupancyPercentage: number;
+  /** `absent` leaves the vehicle timestamp out; `zero` writes 0. Both mean "none" to the app. */
+  timestamp?: 'absent' | 'zero';
 }
 
 export interface TripUpdateSpec {
@@ -72,9 +74,16 @@ function header(nowSec: number): bindings.transit_realtime.IFeedHeader {
   };
 }
 
-/** Epoch seconds a vehicle position carries when the feed is published at `nowSec`. */
-export function vehicleTimestamp(spec: VehicleSpec, nowSec: number): number {
-  return nowSec - spec.lagSecs;
+/** Seconds the trip updates feed header trails the vehicle positions header. */
+export const TRIP_UPDATES_HEADER_LAG_SECS = 3;
+
+/**
+ * Epoch seconds a vehicle position carries when the feed is published at `nowSec`; null when it
+ * carries none, 0 when it carries a zero.
+ */
+export function vehicleTimestamp(spec: VehicleSpec, nowSec: number): number | null {
+  if (spec.timestamp === 'absent') return null;
+  return spec.timestamp === 'zero' ? 0 : nowSec - spec.lagSecs;
 }
 
 function vehicleEntity(
@@ -114,7 +123,9 @@ function vehicleEntity(
       currentStopSequence: stopSequence,
       stopId: `S${stopSequence}`,
       currentStatus: status,
-      timestamp: vehicleTimestamp(spec, nowSec),
+      ...(vehicleTimestamp(spec, nowSec) !== null && {
+        timestamp: vehicleTimestamp(spec, nowSec)!,
+      }),
       congestionLevel: rt.VehiclePosition.CongestionLevel.RUNNING_SMOOTHLY,
       occupancyStatus: spec.occupancy,
       occupancyPercentage: spec.occupancyPercentage,
@@ -156,7 +167,7 @@ export function encodeFeeds(spec: RealtimeSpec, nowSec: number): Feeds {
       entity: spec.vehicles.map((v) => vehicleEntity(v, spec.paths, nowSec)),
     }),
     tripUpdates: encode({
-      header: header(nowSec),
+      header: header(nowSec - TRIP_UPDATES_HEADER_LAG_SECS),
       entity: spec.tripUpdates.map((u) => tripUpdateEntity(u, nowSec)),
     }),
   };

@@ -581,3 +581,81 @@ describe('archive entries', () => {
     expect(store.counts().trips).toBe(1);
   });
 });
+
+describe('frequency_too_dense configuration errors', () => {
+  const header = 'trip_id,start_time,end_time,headway_secs,exact_times\n';
+  const stops = (id: string, start: string, end: string) =>
+    `${id},${start},${start},A,1\n${id},${end},${end},B,2\n`;
+
+  async function loadDense(tripIds: string[], stopRows: string, frequencyRows: string) {
+    return load(
+      miniSchedule({
+        'trips.txt':
+          'route_id,service_id,trip_id\n' + tripIds.map((id) => `R1,WK,${id}`).join('\n') + '\n',
+        'stop_times.txt': STOP_TIMES + stopRows,
+        'frequencies.txt': header + frequencyRows,
+      }),
+    );
+  }
+
+  it('flags a row with more than 2 000 instances possibly running at once, not one with exactly 2 000', async () => {
+    // ceil((D + 60) / H): D = 119 940 s and H = 60 s give 2 000; one more minute gives 2 001
+    const store = await loadDense(
+      ['AT_LIMIT', 'OVER', 'SHORT_HEADWAY'],
+      stops('AT_LIMIT', '00:00:00', '33:19:00') +
+        stops('OVER', '00:00:00', '33:20:00') +
+        stops('SHORT_HEADWAY', '00:00:00', '00:10:00'),
+      'AT_LIMIT,06:00:00,07:00:00,60,0\nOVER,06:00:00,07:00:00,60,0\nSHORT_HEADWAY,06:00:00,07:00:00,1,0\n',
+    );
+    expect(store.configurationErrors()).toEqual([{ code: 'frequency_too_dense', tripId: 'OVER' }]);
+  });
+
+  it('does not look at the window: a one-second headway over a day-long template is too dense', async () => {
+    const store = await loadDense(
+      ['DAY'],
+      stops('DAY', '00:00:00', '23:59:00'),
+      'DAY,06:00:00,06:00:05,1,0\n',
+    );
+    expect(store.configurationErrors()).toEqual([{ code: 'frequency_too_dense', tripId: 'DAY' }]);
+  });
+
+  it('flags a trip once, whichever of its rows is too dense, and after its other errors', async () => {
+    const store = await loadDense(
+      ['MIXED_DENSE', 'ANY_ROW'],
+      stops('MIXED_DENSE', '00:00:00', '02:00:00') + stops('ANY_ROW', '00:00:00', '02:00:00'),
+      [
+        'MIXED_DENSE,06:00:00,07:00:00,1,0',
+        'MIXED_DENSE,07:00:00,08:00:00,600,1',
+        'ANY_ROW,06:00:00,07:00:00,600,0',
+        'ANY_ROW,07:00:00,08:00:00,1,0',
+        'ANY_ROW,08:00:00,09:00:00,2,0',
+        '',
+      ].join('\n'),
+    );
+    expect(store.configurationErrors()).toEqual([
+      { code: 'mixed_exact_times', tripId: 'MIXED_DENSE' },
+      { code: 'frequency_too_dense', tripId: 'MIXED_DENSE' },
+      { code: 'frequency_too_dense', tripId: 'ANY_ROW' },
+    ]);
+  });
+
+  it('checks neither rows that cannot be read nor a trip without a template, and counts a negative duration as 0', async () => {
+    const store = await loadDense(
+      ['UNREADABLE', 'NOTEMPLATE', 'BACKWARDS'],
+      stops('UNREADABLE', '00:00:00', '23:00:00') +
+        'NOTEMPLATE,,,A,1\nNOTEMPLATE,,,B,2\n' +
+        stops('BACKWARDS', '23:00:00', '00:00:00'),
+      [
+        'UNREADABLE,06:00:00,07:00:00,0,0',
+        'UNREADABLE,06:00:00,07:00:00,fast,0',
+        'UNREADABLE,noon,07:00:00,1,0',
+        'NOTEMPLATE,06:00:00,07:00:00,1,0',
+        'BACKWARDS,06:00:00,07:00:00,1,0',
+        '',
+      ].join('\n'),
+    );
+    expect(store.configurationErrors()).toEqual([
+      { code: 'unusable_stop_times', tripId: 'NOTEMPLATE' },
+    ]);
+  });
+});
