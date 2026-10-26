@@ -1,5 +1,6 @@
 terraform {
-  required_version = ">= 1.6"
+  # 1.11 for write-only arguments: the placeholder secret versions use secret_data_wo (secrets.tf).
+  required_version = ">= 1.11"
 
   required_providers {
     google = {
