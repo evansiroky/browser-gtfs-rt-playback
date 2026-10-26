@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-#
 # One image: the Node server plus the built web app (specs/architecture.md "Packaging").
 # Build context is the repository root:  docker build -t gtfs-rt-debugger .
 #
@@ -49,10 +47,17 @@ COPY --from=build /app/web/dist web/dist
 
 # Cloud Run injects PORT (8080 by default); the server listens on it on all interfaces.
 EXPOSE 8080
+# Provenance, set by the build (docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .). Declared this
+# late so a new revision does not invalidate the cached dependency and copy layers above.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/evansiroky/gtfs-rt-debugger" \
+      org.opencontainers.image.revision="$GIT_SHA"
+
 # Never root: uid 1000 is the base image's `node` user (numeric so a host can resolve it). The image
 # holds no secrets: feed URLs and tunables arrive as environment variables.
 USER 1000:1000
 # No HEALTHCHECK: Cloud Run ignores it and probes the TCP port instead.
 # Node is PID 1 on purpose: the server handles SIGTERM/SIGINT itself and exits 0 within its 5 s drain,
-# so no shell wrapper or init process (tini) sits between the platform's signal and the server.
+# so no shell wrapper or init process (tini) sits between the platform's signal and the server. The base
+# image's entrypoint script (docker-entrypoint.sh) only `exec`s the command, so PID 1 is node itself.
 CMD ["node", "server/dist/main.js"]

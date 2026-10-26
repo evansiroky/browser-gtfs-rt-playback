@@ -1,29 +1,30 @@
-# Keep the build context to what the Dockerfile copies: package manifests, the lockfile,
-# tsconfig.base.json and the sources of shared/, server/ and web/.
+# An allowlist: nothing enters the build context unless the Dockerfile copies it. Allowed are the
+# package manifests, the lockfile, tsconfig.base.json and the sources of shared/, server/ and web/.
+# Everything else (.git, specs, plans, infra, scripts, e2e, fixtures, local config ...) is out.
+*
+!package.json
+!package-lock.json
+!tsconfig.base.json
+!shared
+!server
+!web
 
-# Dependencies and build output are produced inside the image.
+# Inside the allowed directories (patterns are matched at every depth). Dependencies and build
+# output are produced inside the image.
 **/node_modules
 **/dist
 **/coverage
 **/*.tsbuildinfo
+**/*.md
 
-# Version control, local state and secrets.
-.git
-.env
-.env.*
-**/.terraform
+# Secrets and local state must not be copied into the image, and web/.env* would be inlined by
+# Vite into the public bundle.
+**/.env
+**/.env.*
+**/.npmrc
+**/*.pem
+**/*.key
+**/*.p12
+**/credentials*.json
 **/*.tfstate*
 **/*.tfvars
-
-# Not part of the image.
-specs
-plans
-.agents
-.claude
-.github
-e2e
-fixtures
-infra
-scripts
-skills-lock.json
-**/*.md
