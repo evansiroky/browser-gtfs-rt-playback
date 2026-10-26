@@ -57,10 +57,21 @@ resource "google_cloud_run_v2_service" "app" {
 
   lifecycle {
     # The deploy pipeline owns the image (`gcloud run deploy --image`); an apply must never roll
-    # the app back. gcloud also stamps itself into client/client_version. Everything else it
-    # writes (annotations, labels, revision names) is either not managed here or computed.
+    # the app back or restart the service. Besides the image, a deploy leaves its marks on fields
+    # Terraform does not set, which would otherwise show as a diff and create a new revision:
+    #   client, client_version    gcloud stamps itself into the service
+    #   template labels           client.knative.dev/nonce: <random>, new on every deploy
+    #   template annotations      run.googleapis.com/client-name, client-version, user-image
+    #   template revision, container name, execution environment
+    #                             filled in by the API or by deploy flags (--revision-suffix)
+    # Everything Terraform does set (scaling, resources, env, secrets, service account) stays managed.
     ignore_changes = [
       template[0].containers[0].image,
+      template[0].containers[0].name,
+      template[0].labels,
+      template[0].annotations,
+      template[0].revision,
+      template[0].execution_environment,
       client,
       client_version,
     ]
