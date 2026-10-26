@@ -14,6 +14,7 @@ const IDLE = 15 * MINUTE;
 const MAX = 120 * MINUTE;
 
 class FakeSchedule implements ScheduleProvider {
+  readonly store = null;
   calls: string[] = [];
   state: ScheduleStatus = { state: 'idle', loadedAt: null, error: null };
   start() {

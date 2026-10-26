@@ -14,6 +14,7 @@ afterEach(async () => {
 
 /** Stand-ins for what later plans plug in: a schedule loader with a query API and a ping store. */
 class Loader implements ScheduleProvider {
+  readonly store = null;
   #state: ScheduleStatus = { state: 'idle', loadedAt: null, error: null };
   start() {
     this.#state = { state: 'ready', loadedAt: 1, error: null };

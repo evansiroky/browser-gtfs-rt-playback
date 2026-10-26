@@ -153,6 +153,7 @@ describe('session API', () => {
   it('shares one activation between simultaneous starts', async () => {
     const calls: string[] = [];
     const schedule = () => ({
+      store: null,
       start: () => void calls.push('start'),
       retry: () => void calls.push('retry'),
       discard: () => void calls.push('discard'),
@@ -339,6 +340,7 @@ describe('data endpoint helpers', () => {
       {},
       {
         schedule: () => ({
+          store: null,
           start() {},
           retry() {},
           discard() {},

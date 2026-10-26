@@ -5,6 +5,7 @@ import type { Config } from '../config.js';
 import type { SnapshotStore } from '../realtime/snapshot-store.js';
 import type { ScheduleProvider } from '../session/schedule-provider.js';
 import type { SessionManager } from '../session/session-manager.js';
+import type { TripEngine } from '../trips/engine.js';
 import { ApiError, handleApiError, notFoundError } from './errors.js';
 import { rejectUnknownQuery, type DataEndpointGuard } from './guards.js';
 import { RateLimiter } from './rate-limit.js';
@@ -23,6 +24,7 @@ export interface ServerContext<S = undefined> {
   readonly store: SnapshotStore;
   readonly schedule: ScheduleProvider;
   readonly session: SessionManager;
+  readonly trips: TripEngine;
   readonly guard: DataEndpointGuard;
 }
 

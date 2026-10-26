@@ -1,3 +1,5 @@
+import { dashboardRoutes } from './api/dashboard.js';
+import { tripsRoutes } from './api/trips.js';
 import { buildApp } from './app.js';
 import { ConfigError, loadConfig } from './config.js';
 import { ScheduleLoader } from './schedule/loader.js';
@@ -20,7 +22,7 @@ const { app } = await buildApp<ScheduleServices>({
     loader: new ScheduleLoader({ config, clock, logger: logger.child({ component: 'schedule' }) }),
   }),
   schedule: ({ services }) => services.loader,
-  routes: [shapesRoutes],
+  routes: [shapesRoutes, dashboardRoutes, tripsRoutes],
 });
 installCrashPolicy(process, app.log, (code) => process.exit(code));
 

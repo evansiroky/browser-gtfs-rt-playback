@@ -1,4 +1,5 @@
 import type { SessionStatus } from '@gtfs-rt-debugger/shared';
+import type { ScheduleStore } from '../schedule/store.js';
 
 export type ScheduleStatus = SessionStatus['schedule'];
 
@@ -11,8 +12,10 @@ export type ScheduleStatus = SessionStatus['schedule'];
  * - `discard()` — the activation ended: abort any in-flight load and drop all schedule data, so
  *   `status()` reports `idle` again.
  * - `status()` — the `schedule` block of `SessionStatus`, read on every status response.
+ * - `store` — the loaded schedule: null unless `status().state` is `ready`.
  */
 export interface ScheduleProvider {
+  readonly store: ScheduleStore | null;
   start(): void;
   retry(): void;
   discard(): void;
@@ -21,6 +24,7 @@ export interface ScheduleProvider {
 
 /** Default until a real provider is plugged in: never loads anything and always reports `idle`. */
 export const noopScheduleProvider: ScheduleProvider = {
+  store: null,
   start() {},
   retry() {},
   discard() {},

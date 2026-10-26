@@ -200,9 +200,10 @@ interface ScheduleStore {
 ## Trip engine
 
 `TripEngine` (`src/trips/engine.ts`) is the pure logic behind the dashboard and the trips API
-(trip-activity.md); the HTTP routes that expose it come with the `trips-api` plan. It is built from
-the clock, the `SnapshotStore`, a `PingStore` and a function returning the loaded `ScheduleStore`
-(or `null`), and its three calls return the shared API types:
+(trip-activity.md). `buildApp` creates it as `context.trips`, after the `PingStore` (which exists
+before the first snapshot and forgets with the store on dormancy), with the clock, the
+`SnapshotStore`, the provider's `store` and the configured feeds. Its three calls return the shared
+API types:
 
 - `dashboard()` - a `DashboardResponse` (schedule-dependent fields null while the schedule is not
   ready; `configurationErrors.total` counts errors, so a trip with two codes counts twice; the active
@@ -210,6 +211,13 @@ the clock, the `SnapshotStore`, a `PingStore` and a function returning the loade
 - `list(name)` - a `TripListResponse`; throws `ScheduleNotReadyError` before the schedule is ready.
 - `detail(tripId)` - a `TripDetailResponse`, or `null` when the trip ID is in neither the schedule nor
   the retained realtime data (a latest-snapshot reference or a retained ping).
+
+The routes (`src/api/dashboard.ts`, `src/api/trips.ts`, mounted in `main.ts` beside the shapes route)
+only validate and serialize: `GET /dashboard` needs an active server (`guard.requireActive`);
+`GET /trips?list=` and `GET /trips/{tripId}` need the schedule (`guard.requireSchedule`). Unknown or
+repeated query parameters and a missing or unknown `list` are `400 bad_request` before any state
+check; a detail with no match is `404 trip_not_found`. Lists are unpaginated: 5,000 active rows are
+about 1.1 MB of JSON, computed and serialized in about 50 ms.
 
 Every call reads the schedule, the latest snapshots (decoded again from their bytes), the pings and the
 clock afresh; nothing derived from time or from realtime data is kept. The one structure that outlives a
