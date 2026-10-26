@@ -135,6 +135,14 @@ def check(workflows, dependabot, contract):
     cloud_perms = {"contents": "read", "id-token": "write"}
     commenter = (c["infra_file"], "comment")
 
+    # The workflows hardcode these targets (event and ref conditions); a changed contract must be noticed.
+    if (c["plan_target"], c["apply_target"], c["deploy_target"]) != (
+        "pr",
+        "refs/heads/main",
+        "refs/heads/main",
+    ):
+        bad.append("identity targets in scripts/lib.sh or infra/iam.tf changed; update the workflows")
+
     for key in allowed:
         if key[0] not in docs or key[1] not in docs[key[0]].get("jobs", {}):
             bad.append(f"{key[0]}: job '{key[1]}' is missing")
