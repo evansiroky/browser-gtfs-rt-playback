@@ -5,3 +5,12 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Terraform (infra/): local working data, state and saved plans. The provider lock file is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+crash.log
