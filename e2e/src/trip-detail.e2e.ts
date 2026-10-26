@@ -268,17 +268,24 @@ describe('a plain trip with pings and a shape', () => {
     await app.page.mouse.down();
     await app.page.mouse.move(startX + 80, startY + 40, { steps: 8 });
     await app.page.mouse.up();
-    // Wait for the drag's inertia to settle.
+    // Wait for the drag's inertia to settle: the markers have not moved for three looks in a row
+    // (a frame that was not rendered yet shows no movement either, hence more than one).
     let moved = await readMap(app.page);
+    let still = 0;
     await expect
-      .poll(async () => {
-        const previous = moved;
-        moved = await readMap(app.page);
-        return moved.markers.every(
-          (m, i) => Math.hypot(m.x - previous.markers[i]!.x, m.y - previous.markers[i]!.y) < 0.5,
-        );
-      })
-      .toBe(true);
+      .poll(
+        async () => {
+          const previous = moved;
+          moved = await readMap(app.page);
+          const same = moved.markers.every(
+            (m, i) => Math.hypot(m.x - previous.markers[i]!.x, m.y - previous.markers[i]!.y) < 0.5,
+          );
+          still = same ? still + 1 : 0;
+          return still;
+        },
+        { interval: 300 },
+      )
+      .toBeGreaterThanOrEqual(3);
     const sample = moved.markers[0]!;
     expect(sample.x).not.toBeCloseTo(first.markers[0]!.x, 0);
 
