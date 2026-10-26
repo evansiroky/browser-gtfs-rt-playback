@@ -12,6 +12,10 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
+  build: {
+    // The map chunk (MapLibre GL JS) is loaded only by the trip screen and is large by nature.
+    chunkSizeWarningLimit: 1200,
+  },
   server: {
     proxy: { '/api': { target: apiTarget, changeOrigin: false } },
   },

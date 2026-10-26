@@ -48,7 +48,7 @@ describe('app shell routes', () => {
     expect(await screen.findByText('Live')).toBeInTheDocument();
   });
 
-  it('renders the trip placeholder with the decoded trip ID and a way back', () => {
+  it('renders the trip screen with the decoded trip ID and a way back', () => {
     renderAt('/trips/route%2F12%20A');
     expect(screen.getByText('Trip route/12 A')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Dashboard/ })).toHaveAttribute('href', '/');

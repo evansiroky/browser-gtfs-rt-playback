@@ -266,7 +266,7 @@ describe('API conventions', () => {
         "img-src 'self' data: blob: https://tiles.openfreemap.org",
         "font-src 'self'",
         "connect-src 'self' https://tiles.openfreemap.org",
-        'worker-src blob:',
+        "worker-src 'self'",
         'child-src blob:',
         "object-src 'none'",
         "base-uri 'self'",

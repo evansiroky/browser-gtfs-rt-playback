@@ -1,8 +1,8 @@
 /**
  * The Content-Security-Policy for every response (architecture.md "Security posture"): only this
  * origin, plus the map tile host. MapLibre fetches the style, vector tiles, sprites and glyphs
- * (`connect-src`), may load raster or sprite images (`img-src`), runs its workers from `blob:`
- * URLs and applies inline styles.
+ * (`connect-src`), may load raster or sprite images (`img-src`), runs its worker from this
+ * origin and applies inline styles.
  */
 export function contentSecurityPolicy(tileHost: string): string {
   return [
@@ -12,7 +12,7 @@ export function contentSecurityPolicy(tileHost: string): string {
     `img-src 'self' data: blob: ${tileHost}`,
     "font-src 'self'",
     `connect-src 'self' ${tileHost}`,
-    'worker-src blob:',
+    "worker-src 'self'",
     'child-src blob:',
     "object-src 'none'",
     "base-uri 'self'",

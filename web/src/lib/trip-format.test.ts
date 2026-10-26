@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { NOW, tripItem } from '@/test/fixtures';
 import {
   REASON_TEXT,
+  agencyTime,
+  classificationLabel,
+  formatServiceDate,
   formatHeadway,
   formatSpan,
   matchesSearch,
@@ -98,5 +101,50 @@ describe('rowKeys', () => {
 describe('tripPath', () => {
   it('percent-encodes the trip ID and carries no query', () => {
     expect(tripPath('a b/c?d')).toBe('/trips/a%20b%2Fc%3Fd');
+  });
+});
+
+describe('formatServiceDate', () => {
+  it('inserts dashes into YYYYMMDD and leaves anything else alone', () => {
+    expect(formatServiceDate('20270115')).toBe('2027-01-15');
+    expect(formatServiceDate('soon')).toBe('soon');
+  });
+});
+
+describe('agencyTime', () => {
+  it('is null until the timezone is known or when it is unusable', () => {
+    expect(agencyTime(NOW, null)).toBeNull();
+    expect(agencyTime(NOW, 'Not/AZone')).toBeNull();
+    expect(agencyTime(NOW, 'America/Los_Angeles', { seconds: true })).toBe('00:00:00');
+  });
+});
+
+describe('classificationLabel', () => {
+  const zone = 'America/Los_Angeles';
+  it('names the list and, for the unscheduled one, the reason', () => {
+    expect(
+      classificationLabel(
+        { list: 'unscheduled-with-realtime', reason: 'unknown_trip', start: null, end: null },
+        zone,
+      ),
+    ).toEqual({
+      text: 'Not scheduled this minute, with realtime data',
+      detail: 'Trip ID not in schedule',
+    });
+  });
+
+  it('adds the entry span on the agency clock, which tells frequency instances apart', () => {
+    expect(
+      classificationLabel(
+        { list: 'active-without-realtime', reason: null, start: NOW, end: NOW + 1800 },
+        zone,
+      ),
+    ).toEqual({ text: 'Active now, without realtime data', detail: '00:00–00:30' });
+    expect(
+      classificationLabel(
+        { list: 'active-with-realtime', reason: null, start: NOW, end: NOW + 1800 },
+        null,
+      ),
+    ).toEqual({ text: 'Active now, with realtime data', detail: null });
   });
 });
