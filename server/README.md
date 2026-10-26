@@ -6,7 +6,7 @@ specified in [`specs/`](../specs/README.md); this file documents the implementat
 
 ```bash
 npm run build -w server && npm start -w server   # node server/dist/main.js, port 8080
-npm test -w server                               # Vitest (builds shared + server first)
+npm test -w server                               # Vitest (builds shared, fixtures and server first)
 ```
 
 The default port 8080 is what the web app's Vite dev proxy targets (`API_PROXY_TARGET`) and what
@@ -27,9 +27,9 @@ value. Empty values count as unset. Durations are milliseconds, sizes bytes.
 | `POLL_INTERVAL_MS`            | `10000`                         | Realtime poll interval                                             |
 | `RT_TIMEOUT_MS`               | `8000`                          | Realtime fetch timeout (whole exchange)                            |
 | `RT_MAX_BYTES`                | `26214400` (25 MiB)             | Realtime body limit, after content decoding                        |
-| `SCHEDULE_TIMEOUT_MS`         | `120000`                        | Schedule fetch timeout (used by the schedule loader)               |
-| `SCHEDULE_MAX_BYTES`          | `104857600` (100 MiB)           | Schedule download limit (schedule loader)                          |
-| `SCHEDULE_MEMORY_LIMIT_BYTES` | `805306368` (768 MiB)           | Schedule memory limit (schedule loader)                            |
+| `SCHEDULE_TIMEOUT_MS`         | `120000`                        | Schedule download timeout (whole exchange; parsing is not timed)   |
+| `SCHEDULE_MAX_BYTES`          | `104857600` (100 MiB)           | Schedule download limit, on the body as received (after gzip)      |
+| `SCHEDULE_MEMORY_LIMIT_BYTES` | `805306368` (768 MiB)           | Schedule memory limit: estimated peak of the decoded data          |
 | `IDLE_TIMEOUT_MS`             | `900000` (15 min)               | Inactivity timeout                                                 |
 | `MAX_ACTIVATION_MS`           | `7200000` (2 h)                 | Maximum activation duration                                        |
 | `EXIT_ON_IDLE`                | `false`                         | `true`/`false` (or `1`/`0`); the deployment sets `true`            |
@@ -80,6 +80,49 @@ and query values) before writing.
   announces a snapshot; the session sets its own state before calling any hook; pollers start
   independently of `schedule.start()`. A throwing provider call makes the schedule report
   `failed` with code `internal_error` until a later call succeeds (a session start retries).
+- **Schedule.** `ScheduleLoader` (`src/schedule/`) downloads the schedule once per activation
+  and reduces it to a `ScheduleStore` (see [Schedule store](#schedule-store)). States
+  `idle → loading → ready | failed`; `idle` only while dormant. A session start downloads at wake
+  and never again for that activation, whatever later starts, pings and time do. If a load fails,
+  one automatic retry follows 30 s later on the injected clock; if that fails too the schedule stays
+  `failed` until a session `start` (`retry()`) loads it again, which gets its own single automatic
+  retry. While `failed` the status carries the error; while loading (a retry included) it carries
+  none. Dormancy (`discard()`) aborts the download or parse in flight, drops the store and cancels
+  the retry timer; a load that still finishes afterwards is ignored. Realtime polling never waits
+  for the schedule.
+  The body is kept as the chunks it arrived in (at most `SCHEDULE_MAX_BYTES`, never one contiguous
+  copy) and read with `yauzl` (zip64 and data descriptors included) and streamed through
+  `csv-parse`; nothing is written to disk. Only top-level files of the archive are read
+  (`agency.txt`, `routes.txt`, `trips.txt`, `calendar.txt`, `calendar_dates.txt`,
+  `frequencies.txt`, `stop_times.txt`, `shapes.txt`); a feed zipped inside a folder fails with
+  `missing_file`. Error codes (all URL-free): `http_status_<n>`, `timeout`, `too_large` (download
+  limit or memory limit), `network_error`, `too_many_redirects`, `redirect_not_allowed`,
+  `missing_file` (names the file), `bad_zip`, `bad_csv` (names the file), `invalid_schedule` (a
+  required column or the agency timezone is missing or unusable) and `internal_error`.
+- **Schedule memory limit** is checked against a running estimate of the heap the load holds at its
+  peak. Everything kept is charged by the size of its text, however long: the rows of routes, trips and
+  frequencies, agency names, service ids, trip ids, polylines and shape ids, and the raw points of the
+  shape being encoded (every shape of an ungrouped `shapes.txt`). Values that are only parsed are kept
+  as numbers (stop times, calendar dates) and their text is dropped. It is calibrated to sit above the
+  measured heap (see the benchmark below). The downloaded body itself is not counted: it is bounded by
+  `SCHEDULE_MAX_BYTES` and dropped once parsed.
+- **Reading the archive is bounded too.** The download limit and timeout cover only the download, so
+  the inflated bytes of the files that are read may not exceed `DECOMPRESSION_FACTOR` (8) x
+  `SCHEDULE_MAX_BYTES` (`too_large`), and reading must finish within `PARSE_TIMEOUT_FACTOR` (4) x
+  `SCHEDULE_TIMEOUT_MS` (`timeout`, measured on the injected clock from the end of the download).
+  Both are checked on the inflated stream itself, so a file of blank lines or a zip bomb stops at the
+  limit, and a `discard()` stops a parse at once, not at the next row. The factors are constants in
+  `src/schedule/loader.ts`, not settings. An archive with more than 10 000 entries is `bad_zip`; only the
+  eight GTFS files are indexed.
+- **Unreadable cells are not repaired.** A `shapes.txt` point whose latitude or longitude is not a
+  number in range, or whose `shape_pt_sequence` is not a number, is skipped; a shape without a valid
+  point has no polyline. A `stop_times.txt` row whose `stop_sequence` is not plain digits (`0x10`, `1e1`,
+  `-1` are not), and rows of trips absent from `trips.txt`, are skipped; `frequencies.txt` rows of
+  unknown trips are dropped. A time that is not `H:MM:SS` (minutes and seconds 00-59) counts as missing.
+  A `calendar.txt` row whose `start_date` or `end_date` is not `YYYYMMDD` is ignored, as is a
+  `calendar_dates.txt` row whose date is not, or whose type is not 1 or 2. For a repeated `route_id` or
+  `trip_id` the first row wins; for a service date both added and removed by `calendar_dates.txt` the
+  addition wins.
 - **Realtime.** One poller per configured feed: a fetch at wake, then a fixed-cadence interval;
   a tick is skipped while the previous fetch is in flight. Redirects are followed manually (≤ 3,
   `http`/`https` only, and never away from the configured origin to an internal host:
@@ -112,6 +155,65 @@ nosniff`, `Referrer-Policy: no-referrer`. Every `/api/v1` response, including ro
 - Session endpoints take no body; send none (an empty body with `Content-Type: application/json`
   is a `400`).
 
+## Schedule store
+
+`ScheduleLoader.store` (`src/schedule/loader.ts`) is the loaded `ScheduleStore`
+(`src/schedule/store.ts`), or `null` unless the loader is `ready`. The trip engine and the trips API
+read it through the `services` slot (`services.loader.store`) and must treat `null` as "not ready"
+(data endpoints get that from `guard.requireSchedule`). It is immutable and replaced wholesale by a
+later activation, so do not keep a reference past a request.
+
+```ts
+interface ScheduleStore {
+  agency(): { names: readonly string[]; timezone: string }; // every agency_name; first row's timezone
+  trip(tripId): Row | undefined; // whole trips.txt row (Row = Readonly<Record<string, string>>)
+  route(routeId): Row | undefined; // whole routes.txt row
+  frequencies(tripId): readonly Row[]; // whole frequencies.txt rows, file order; [] if none
+  template(tripId): TripTemplate | null; // { startSecs, endSecs } from the service day base
+  trips(): IterableIterator<ScheduleTrip>; // { id, row, template, frequencies }, trips.txt order
+  operatesOn(serviceId, serviceDate: 'YYYYMMDD'): boolean;
+  shape(shapeId): string | null; // the precision-6 polyline, exactly as served
+  configurationErrors(): readonly { code: ConfigurationErrorCode; tripId: string }[];
+  counts(): { trips; routes; shapes; estimatedBytes };
+}
+```
+
+- **Templates.** `startSecs` is the departure (else arrival) of the stop with the lowest
+  `stop_sequence`; `endSecs` the arrival (else departure) of the one with the highest, in seconds from
+  the service day's "noon minus 12 h" (values above 86 400 are normal). `stop_times.txt` need not be
+  sorted. A trip with no usable template (no stop times at all, or a first stop with neither departure
+  nor arrival, or a last stop with neither arrival nor departure, or only rows whose `stop_sequence`
+  is unusable) has `template: null` and is listed as an `unusable_stop_times` configuration error.
+- **`operatesOn`.** The weekday flag of `calendar.txt` within `start_date`..`end_date` inclusive, then
+  `calendar_dates.txt`: type 1 adds a date, type 2 removes it. A service only in `calendar_dates.txt`
+  operates exactly on its type 1 dates. Unknown services never operate.
+- **Configuration errors** (trip-activity.md "Schedule entries"). Computed once at load, in
+  `trips.txt` order: `mixed_exact_times` when the trip has more than one `frequencies.txt` row and their
+  `exact_times` (absent or empty counting as `0`) are not all equal; `unusable_stop_times` when its
+  `template` is null. A trip with both problems appears twice, `mixed_exact_times` first. They never
+  fail the load.
+- **Shapes** are held only as encoded strings. `shapes.txt` is encoded while it streams: a file
+  grouped by `shape_id` holds one shape's raw points at a time; the first time a `shape_id` returns
+  after other shapes' rows, the file is known to be ungrouped and is read again, buffering all shapes
+  (counted toward the memory limit) and encoding each when the file ends.
+
+## Benchmark
+
+`scripts/bench-schedule.mjs` (not part of `npm test`; needs `npm run build -w server`) generates a
+synthetic schedule with a streaming zip writer — by default 100 000 trips, 2 000 000 stop times and
+4 000 shapes of 500 points (2 000 000 points) — in a temp directory, then loads it in a fresh
+process with the real parser, in 64 KiB chunks like a download.
+
+```bash
+node --expose-gc server/scripts/bench-schedule.mjs [--dir DIR] [--trips N] [--stops N]
+     [--shapes N] [--points N] [--limit BYTES] [--ungrouped] [--keep]
+```
+
+It prints peak RSS, peak and retained heap (after a forced GC), the loader's own estimate, the
+worst event-loop stall, and checks that shapes are strings. `--ungrouped` interleaves the points of
+all shapes to exercise the buffered path; `--limit` shows the `too_large` abort. The numbers measured
+for this implementation are in [`plans/schedule-loader.md`](../plans/schedule-loader.md).
+
 ## Threat model
 
 The site is public and unauthenticated by design, so the API does not try to tell its own pages
@@ -122,12 +224,12 @@ single instance, and the request size and time limits above. Feed URLs never lea
 ## Extension points
 
 Later plans plug in through `buildApp(options)` (`src/app.ts`) and wire their pieces in
-`src/main.ts`. A worked example (the names stand in for what `schedule-loader`, `trip-engine` and
-`trips-api` add):
+`src/main.ts`. A worked example (`ScheduleLoader` and `shapesRoutes` are real, see `src/main.ts`; the
+other names stand in for what `trip-engine` and `trips-api` add):
 
 ```ts
 interface Services {
-  loader: ScheduleLoader; // implements ScheduleProvider and has a query API
+  loader: ScheduleLoader; // implements ScheduleProvider; `loader.store` is the query API
   pings: PingStore;
   engine: TripEngine;
 }
@@ -159,7 +261,7 @@ export const shapesRoutes: ApiRoutes<Services> = (api, { services, guard }) => {
     { preHandler: [rejectUnknownQuery([]), guard.requireSchedule] },
     async (request) => {
       const { shapeId } = request.params as { shapeId: string };
-      const polyline = services.loader.shape(shapeId);
+      const polyline = services.loader.store?.shape(shapeId) ?? null;
       if (polyline === null) throw new ApiError(404, 'shape_not_found', 'No such shape.');
       return { shapeId, encoding: 'polyline6', polyline };
     },

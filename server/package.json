@@ -6,15 +6,23 @@
   "main": "./dist/main.js",
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
-    "test": "tsc -b && vitest run",
+    "typecheck": "tsc -b . ../fixtures && tsc -p tsconfig.test.json",
+    "test": "tsc -b . ../fixtures && vitest run",
     "build": "tsc -b",
     "start": "node dist/main.js",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "dependencies": {
     "@fastify/static": "^10.1.7",
+    "@gtfs-rt-debugger/shared": "*",
+    "csv-parse": "7.0.3",
     "fastify": "^5.12.7",
-    "gtfs-realtime-bindings": "^2.2.0"
+    "gtfs-realtime-bindings": "^2.2.0",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@gtfs-rt-debugger/fixtures": "^0.0.0",
+    "@types/yauzl": "3.4.0",
+    "fflate": "^0.8.3"
   }
 }

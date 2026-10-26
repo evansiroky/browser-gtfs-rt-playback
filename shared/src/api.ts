@@ -89,7 +89,7 @@ export interface SessionStatus {
 
 // --- dashboard.md -------------------------------------------------------------------------------
 
-export const CONFIGURATION_ERROR_CODES = ['mixed_exact_times'] as const;
+export const CONFIGURATION_ERROR_CODES = ['mixed_exact_times', 'unusable_stop_times'] as const;
 
 export type ConfigurationErrorCode = (typeof CONFIGURATION_ERROR_CODES)[number];
 
