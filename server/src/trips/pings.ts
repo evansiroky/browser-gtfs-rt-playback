@@ -6,6 +6,7 @@ import {
   type Snapshot,
   type SnapshotStore,
 } from '../realtime/snapshot-store.js';
+import { optionalNumber } from './references.js';
 
 /**
  * A ping as the trip detail returns it: the typed fields of the API, plus the other
@@ -15,19 +16,40 @@ export type StoredPing = Ping & Record<string, unknown>;
 
 type Fields = Record<string, unknown>;
 
+/** Where a ping can be read: a retained snapshot, and the byte range of its entity in it. */
+interface Source {
+  readonly record: SnapshotRecord;
+  readonly offset: number;
+  readonly length: number;
+  /** The entity re-encoded, for a snapshot whose entities could not be located in its bytes. */
+  readonly own: Uint8Array | null;
+}
+
+/** The index entry of a ping: identity, number and source, never its decoded fields. */
 interface Observation {
-  readonly tripId: string;
+  readonly trip: TripPings;
+  /** `vehicle ID, timestamp`: the rest of the ping's identity within its trip. */
   readonly key: string;
-  readonly ping: StoredPing;
-  readonly bytes: number;
+  readonly sequence: number;
+  /** Epoch seconds the server first received the ping. */
+  readonly receivedAt: number;
+  /** The resolved ping timestamp. */
+  readonly timestamp: number;
   /** The newest retained snapshot that contains the ping. */
-  seenIn: SnapshotRecord;
+  source: Source;
+  readonly bytes: number;
+}
+
+interface TripPings {
+  readonly tripId: string;
+  /** In order of first receipt, so ascending by sequence. */
+  readonly byKey: Map<string, Observation>;
 }
 
 interface SnapshotRecord {
   readonly snapshot: Snapshot;
-  /** The pings whose newest retained snapshot this is. */
-  readonly pings: Set<Observation>;
+  /** Pings last seen here; an entry is stale once the ping has been seen in a newer snapshot. */
+  readonly observations: Observation[];
 }
 
 const text = (value: unknown): string | null =>
@@ -35,12 +57,51 @@ const text = (value: unknown): string | null =>
 
 const number = (value: unknown): number | null => (typeof value === 'number' ? value : null);
 
-/** A rough count of what a ping holds on the heap: the object, its strings and extra fields. */
-function estimateBytes(ping: StoredPing, extra: Fields): number {
-  let bytes = 448;
-  for (const value of Object.values(ping)) if (typeof value === 'string') bytes += 2 * value.length;
-  if (Object.keys(extra).length > 0) bytes += 2 * JSON.stringify(extra).length + 64;
-  return bytes;
+/** What an observation costs: its record, its two table slots and its key. */
+const OBSERVATION_BYTES = 200;
+
+/**
+ * The byte ranges of the `entity` fields of a serialized `FeedMessage`, in order, or null when
+ * the message cannot be walked (the caller then keeps each entity's own bytes).
+ */
+export function entityRanges(bytes: Uint8Array): { offset: number; length: number }[] | null {
+  const ranges: { offset: number; length: number }[] = [];
+  let pos = 0;
+  const varint = (): number | null => {
+    let value = 0;
+    for (let shift = 0; shift < 35; shift += 7) {
+      if (pos >= bytes.length) return null;
+      const byte = bytes[pos++]!;
+      value += (byte & 0x7f) * 2 ** shift;
+      if ((byte & 0x80) === 0) return value;
+    }
+    return null;
+  };
+  while (pos < bytes.length) {
+    const tag = varint();
+    if (tag === null) return null;
+    switch (tag & 7) {
+      case 0:
+        if (varint() === null) return null;
+        break;
+      case 1:
+        pos += 8;
+        break;
+      case 5:
+        pos += 4;
+        break;
+      case 2: {
+        const length = varint();
+        if (length === null || pos + length > bytes.length) return null;
+        if (tag >>> 3 === 2) ranges.push({ offset: pos, length });
+        pos += length;
+        break;
+      }
+      default:
+        return null;
+    }
+  }
+  return pos === bytes.length ? ranges : null;
 }
 
 /**
@@ -49,14 +110,16 @@ function estimateBytes(ping: StoredPing, extra: Fields): number {
  * - A ping is identified by (trip ID, vehicle ID, timestamp) and recorded once, however many
  *   snapshots repeat it; the trip's ping sequence counts first receipts since the activation
  *   began, and an expired ping's number is never reused.
- * - A ping lives as long as a retained snapshot contains it: the snapshot store's retention
- *   window and memory limit decide (data-retention.md), through its eviction events. The
- *   pings' estimated size counts against the store's memory limit.
- * - Dormancy (the store's clear) forgets the pings and the sequences.
+ * - Only an index is kept: identity, sequence number, first receipt and where the entity lies in
+ *   a retained snapshot. A ping's fields are read from that snapshot when they are asked for
+ *   ({@link forTrip}), so a ping lasts exactly as long as a retained snapshot contains it: the
+ *   snapshot store's retention window and memory limit decide (data-retention.md), through its
+ *   eviction events. The index's estimated size counts against the store's memory limit.
+ * - Dormancy (the store's clear) forgets the index and the sequences.
  */
 export class PingStore {
   readonly #records: SnapshotRecord[] = [];
-  readonly #pings = new Map<string, Map<string, Observation>>();
+  readonly #trips = new Map<string, TripPings>();
   readonly #sequences = new Map<string, number>();
   readonly #snapshots: SnapshotStore;
   readonly #unsubscribe: (() => void)[];
@@ -73,16 +136,23 @@ export class PingStore {
     ];
   }
 
-  /** The retained pings of a trip ID, ascending by sequence. */
+  /** The retained pings of a trip ID, ascending by sequence, with their fields. */
   forTrip(tripId: string): StoredPing[] {
-    return [...(this.#pings.get(tripId)?.values() ?? [])].map((o) => o.ping);
+    const trip = this.#trips.get(tripId);
+    if (!trip) return [];
+    const pings: StoredPing[] = [];
+    for (const observation of trip.byKey.values()) {
+      const ping = materialize(observation);
+      if (ping) pings.push(ping);
+    }
+    return pings;
   }
 
   hasTrip(tripId: string): boolean {
-    return this.#pings.has(tripId);
+    return this.#trips.has(tripId);
   }
 
-  /** Estimated heap held by the retained pings. */
+  /** Estimated heap held by the index. */
   retainedBytes(): number {
     return this.#bytes;
   }
@@ -94,135 +164,150 @@ export class PingStore {
 
   #add(snapshot: Snapshot, message: FeedMessage): void {
     if (snapshot.feed !== 'vehiclePositions') return;
-    const record: SnapshotRecord = { snapshot, pings: new Set() };
+    const record: SnapshotRecord = { snapshot, observations: [] };
     this.#records.push(record);
     const fallbackTimestamp = snapshot.feedTimestamp ?? Math.floor(snapshot.receivedAt / 1000);
-    for (const entity of message.entity) {
-      if (!entity.vehicle) continue;
-      const fields = transit_realtime.VehiclePosition.toObject(
-        entity.vehicle as InstanceType<typeof transit_realtime.VehiclePosition>,
-        {
-          enums: String,
-          longs: Number,
-          defaults: false,
-        },
-      ) as Fields;
-      this.#observe(record, entity.id, fields, fallbackTimestamp);
-    }
+    const ranges = entityRanges(snapshot.bytes);
+    const walked = ranges !== null && ranges.length === message.entity.length;
+    message.entity.forEach((entity, index) => {
+      const position = entity.vehicle;
+      if (!position) return;
+      const tripId = text(position.trip?.tripId);
+      if (tripId === null) return;
+      const vehicleId = text(position.vehicle?.id) ?? entity.id;
+      // a timestamp of 0 is no timestamp
+      const timestamp = optionalNumber(position, 'timestamp') || fallbackTimestamp;
+      const range = walked ? ranges[index]! : null;
+      const source: Source = range
+        ? { record, offset: range.offset, length: range.length, own: null }
+        : { record, offset: 0, length: 0, own: encodeEntity(entity) };
+      this.#observe(record, tripId, `${vehicleId}\0${timestamp}`, timestamp, source);
+    });
     // The new pings may push the history over its memory limit.
     this.#snapshots.prune();
   }
 
-  #observe(record: SnapshotRecord, entityId: string, fields: Fields, fallbackTimestamp: number) {
-    const { snapshot } = record;
-    const { trip, vehicle, position, ...rest } = fields as {
-      trip?: Fields;
-      vehicle?: Fields;
-      position?: Fields;
-    } & Fields;
-    const {
-      tripId: tripIdField,
-      routeId,
-      directionId,
-      startTime,
-      startDate,
-      ...tripRest
-    } = trip ?? {};
-    const tripId = text(tripIdField);
-    if (tripId === null) return;
-    const { id, label, licensePlate, ...vehicleRest } = vehicle ?? {};
-    const { latitude, longitude, bearing, odometer, speed, ...positionRest } = position ?? {};
-    const {
-      currentStopSequence,
-      stopId,
-      currentStatus,
-      timestamp,
-      congestionLevel,
-      occupancyStatus,
-      occupancyPercentage,
-      ...extra
-    } = rest;
-    const { scheduleRelationship, ...tripExtra } = tripRest;
-    for (const [name, leftover] of [
-      ['trip', tripExtra],
-      ['vehicle', vehicleRest],
-      ['position', positionRest],
-    ] as const) {
-      if (Object.keys(leftover).length > 0) extra[name] = leftover;
-    }
-
-    const vehicleId = text(id) ?? entityId;
-    const pingTimestamp = number(timestamp) ?? fallbackTimestamp;
-    const key = JSON.stringify([vehicleId, pingTimestamp]);
-
-    const known = this.#pings.get(tripId)?.get(key);
+  #observe(
+    record: SnapshotRecord,
+    tripId: string,
+    key: string,
+    timestamp: number,
+    source: Source,
+  ): void {
+    let trip = this.#trips.get(tripId);
+    const known = trip?.byKey.get(key);
     if (known) {
-      known.seenIn.pings.delete(known);
-      known.seenIn = record;
-      record.pings.add(known);
+      known.source = source;
+      record.observations.push(known);
       return;
     }
-
+    if (!trip) {
+      trip = { tripId, byKey: new Map() };
+      this.#trips.set(tripId, trip);
+    }
     const sequence = (this.#sequences.get(tripId) ?? 0) + 1;
     this.#sequences.set(tripId, sequence);
-    const ping: StoredPing = {
-      ...extra,
-      sequence,
-      receivedAt: Math.floor(snapshot.receivedAt / 1000),
-      timestamp: pingTimestamp,
-      vehicleId,
-      vehicleLabel: text(label),
-      licensePlate: text(licensePlate),
-      latitude: number(latitude),
-      longitude: number(longitude),
-      bearing: number(bearing),
-      odometer: number(odometer),
-      speed: number(speed),
-      currentStopSequence: number(currentStopSequence),
-      stopId: text(stopId),
-      currentStatus: text(currentStatus),
-      congestionLevel: text(congestionLevel),
-      occupancyStatus: text(occupancyStatus),
-      occupancyPercentage: number(occupancyPercentage),
-      scheduleRelationship: text(scheduleRelationship),
-      routeId: text(routeId),
-      directionId: number(directionId),
-      startTime: text(startTime),
-      startDate: text(startDate),
-    };
     const observation: Observation = {
-      tripId,
+      trip,
       key,
-      ping,
-      bytes: estimateBytes(ping, extra),
-      seenIn: record,
+      sequence,
+      receivedAt: Math.floor(record.snapshot.receivedAt / 1000),
+      timestamp,
+      source,
+      bytes: OBSERVATION_BYTES + 2 * key.length + (source.own?.length ?? 0),
     };
-    record.pings.add(observation);
     this.#bytes += observation.bytes;
-    let byKey = this.#pings.get(tripId);
-    if (!byKey) {
-      byKey = new Map();
-      this.#pings.set(tripId, byKey);
-    }
-    byKey.set(key, observation);
+    trip.byKey.set(key, observation);
+    record.observations.push(observation);
   }
 
   #expire(snapshot: Snapshot): void {
     const at = this.#records.findIndex((record) => record.snapshot === snapshot);
     if (at < 0) return;
     const [record] = this.#records.splice(at, 1);
-    for (const observation of record!.pings) {
+    for (const observation of record!.observations) {
+      // seen in a newer snapshot since: that one keeps it
+      if (observation.source.record !== record) continue;
       this.#bytes -= observation.bytes;
-      const byKey = this.#pings.get(observation.tripId);
-      byKey?.delete(observation.key);
-      if (byKey?.size === 0) this.#pings.delete(observation.tripId);
+      observation.trip.byKey.delete(observation.key);
+      if (observation.trip.byKey.size === 0) this.#trips.delete(observation.trip.tripId);
     }
   }
 
   #clear(): void {
     this.#records.length = 0;
-    this.#pings.clear();
+    this.#trips.clear();
     this.#sequences.clear();
     this.#bytes = 0;
   }
+}
+
+function encodeEntity(entity: FeedMessage['entity'][number]): Uint8Array {
+  return transit_realtime.FeedEntity.encode(entity).finish();
+}
+
+/** Reads a ping's fields from the snapshot that contains it. */
+function materialize(observation: Observation): StoredPing | null {
+  const { source } = observation;
+  const bytes =
+    source.own ??
+    source.record.snapshot.bytes.subarray(source.offset, source.offset + source.length);
+  const entity = transit_realtime.FeedEntity.decode(bytes);
+  if (!entity.vehicle) return null;
+  const fields = transit_realtime.VehiclePosition.toObject(
+    entity.vehicle as InstanceType<typeof transit_realtime.VehiclePosition>,
+    { enums: String, longs: Number, defaults: false },
+  ) as Fields;
+  const { trip, vehicle, position, ...rest } = fields as {
+    trip?: Fields;
+    vehicle?: Fields;
+    position?: Fields;
+  } & Fields;
+  const { routeId, directionId, startTime, startDate, scheduleRelationship, ...tripExtra } =
+    trip ?? {};
+  const { id, label, licensePlate, ...vehicleExtra } = vehicle ?? {};
+  const { latitude, longitude, bearing, odometer, speed, ...positionExtra } = position ?? {};
+  const {
+    currentStopSequence,
+    stopId,
+    currentStatus,
+    congestionLevel,
+    occupancyStatus,
+    occupancyPercentage,
+    ...extra
+  } = rest;
+  delete tripExtra['tripId'];
+  delete extra['timestamp'];
+  for (const [name, leftover] of [
+    ['trip', tripExtra],
+    ['vehicle', vehicleExtra],
+    ['position', positionExtra],
+  ] as const) {
+    if (Object.keys(leftover).length > 0) extra[name] = leftover;
+  }
+  return {
+    ...extra,
+    sequence: observation.sequence,
+    receivedAt: observation.receivedAt,
+    timestamp: observation.timestamp,
+    vehicleId: text(id) ?? entity.id,
+    vehicleLabel: text(label),
+    licensePlate: text(licensePlate),
+    latitude: number(latitude),
+    longitude: number(longitude),
+    bearing: number(bearing),
+    odometer: number(odometer),
+    speed: number(speed),
+    currentStopSequence: number(currentStopSequence),
+    stopId: text(stopId),
+    currentStatus: text(currentStatus),
+    congestionLevel: text(congestionLevel),
+    occupancyStatus: text(occupancyStatus),
+    occupancyPercentage: number(occupancyPercentage),
+    scheduleRelationship: text(scheduleRelationship),
+    routeId: text(routeId),
+    directionId: number(directionId),
+    startTime: text(startTime),
+    startDate: text(startDate),
+  };
 }

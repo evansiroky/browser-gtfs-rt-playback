@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { harness, vehicle } from '../test-support/trips.js';
+import { transit_realtime, decodeFeed } from '../realtime/snapshot-store.js';
+import { encode, harness, update, vehicle } from '../test-support/trips.js';
+import { entityRanges } from './pings.js';
 
 const NOW = '2026-10-14T19:07:42Z';
 const MINUTE = 60_000;
@@ -105,6 +107,12 @@ describe('PingStore', () => {
       const h = harness({ now: NOW });
       h.push('vehiclePositions', [bus('e', 'T', 'v', null)], null);
       expect(h.pings.forTrip('T')[0]!.timestamp).toBe(Math.floor(Date.parse(NOW) / 1000));
+    });
+
+    it('a timestamp of 0 counts as none', () => {
+      const h = harness({ now: NOW });
+      h.push('vehiclePositions', [bus('e', 'T', 'v', 0)], 777);
+      expect(h.pings.forTrip('T')[0]!.timestamp).toBe(777);
     });
 
     it('without a vehicle ID, the entity ID stands in', () => {
@@ -317,23 +325,20 @@ describe('PingStore', () => {
     });
 
     it('a ping expires with a snapshot evicted by the memory limit, and the sequence goes on', () => {
-      const h = harness({ now: NOW, memoryLimitBytes: 4_000 });
-      const filler = 'x'.repeat(300);
+      // what one snapshot with one ping costs, snapshot bytes and ping index together
+      const probe = harness({ now: NOW });
+      probe.push('vehiclePositions', [bus('e1', 'T', 'v', 1)]);
+      const cost = probe.snapshots.retainedBytes() + probe.pings.retainedBytes();
+      const h = harness({ now: NOW, memoryLimitBytes: Math.floor(cost * 3.5) });
       for (let i = 1; i <= 5; i++) {
-        h.push('vehiclePositions', [
-          bus(`e${i}`, 'T', 'v', i, { vehicle: { id: 'v', label: filler } }),
-        ]);
+        h.push('vehiclePositions', [bus(`e${i}`, 'T', 'v', i)]);
         h.clock.advance(10_000);
       }
       const kept = h.pings.forTrip('T');
-      expect(kept.length).toBeGreaterThan(0);
-      expect(kept.length).toBeLessThan(5);
-      expect(kept.map((p) => p.sequence)).toEqual(
-        Array.from({ length: kept.length }, (_, i) => 5 - kept.length + 1 + i),
-      );
-      expect(h.snapshots.all('vehiclePositions').length).toBe(kept.length);
+      expect(kept.map((p) => p.sequence)).toEqual([3, 4, 5]);
+      expect(h.snapshots.all('vehiclePositions')).toHaveLength(3);
       h.push('vehiclePositions', [bus('e6', 'T', 'v', 6)]);
-      expect(h.pings.forTrip('T').at(-1)!.sequence).toBe(6);
+      expect(h.pings.forTrip('T').map((p) => p.sequence)).toEqual([4, 5, 6]);
     });
 
     it('counts its pings against the memory limit of the history', () => {
@@ -355,6 +360,140 @@ describe('PingStore', () => {
       expect(h.snapshots.retainedBytes()).toBeLessThan(limit / 2);
       expect(evicted).toBe(true);
       expect(h.pings.forTrip('T').length).toBe(h.snapshots.all('vehiclePositions').length * 5);
+    });
+  });
+
+  describe('an index into the retained snapshots, not a copy of the pings', () => {
+    it('keeps a ping while any retained snapshot contains it, and nothing once the last one goes', () => {
+      const h = harness({ now: NOW, retentionMs: 60 * MINUTE });
+      for (let i = 0; i < 3; i++) {
+        h.push('vehiclePositions', [bus('e', 'T', 'v', 100)]);
+        h.clock.advance(10_000);
+      }
+      const bytes = h.pings.retainedBytes();
+      expect(bytes).toBeGreaterThan(0);
+      // the first two snapshots are older than 60 minutes, the third is not
+      h.clock.advance(60 * MINUTE - 20_000 + 5_000);
+      h.snapshots.prune();
+      expect(h.snapshots.all('vehiclePositions')).toHaveLength(1);
+      expect(sequences(h, 'T')).toEqual([[1, 'v', 100]]);
+      expect(h.pings.retainedBytes()).toBe(bytes);
+      h.clock.advance(20_000);
+      h.snapshots.prune();
+      expect(h.pings.hasTrip('T')).toBe(false);
+      expect(h.pings.retainedBytes()).toBe(0);
+    });
+
+    it('reads a ping from the newest snapshot that contains it', () => {
+      const h = harness({ now: NOW });
+      const at = (latitude: number) =>
+        bus('e', 'T', 'v', 100, { position: { latitude, longitude: 1 } });
+      h.push('vehiclePositions', [at(10)]);
+      h.clock.advance(10_000);
+      h.push('vehiclePositions', [at(20), bus('f', 'T', 'v', 200)]);
+      expect(h.pings.forTrip('T').map((p) => [p.sequence, p.latitude])).toEqual([
+        [1, 20],
+        [2, null],
+      ]);
+    });
+
+    it('costs about what the snapshot does when entities are realistic, not a multiple of it', () => {
+      const h = harness({ now: NOW });
+      const snapshot = h.push(
+        'vehiclePositions',
+        Array.from({ length: 1000 }, (_, i) =>
+          bus(`e${i}`, `trip-${i}`, `bus-${i}`, 1_700_000_000 + i, {
+            vehicle: { id: `bus-${i}`, label: `Bus ${i}`, licensePlate: `AB-${i}` },
+            position: { latitude: 37.7 + i / 1e5, longitude: -122.4, bearing: 90, speed: 7.5 },
+            currentStopSequence: 4,
+            stopId: 'S4',
+            currentStatus: 2,
+            occupancyStatus: 1,
+          }),
+        ),
+      );
+      const ratio = h.pings.retainedBytes() / snapshot.bytes.byteLength;
+      expect(ratio).toBeGreaterThan(1);
+      expect(ratio).toBeLessThan(3);
+    });
+
+    it('locates every entity of a snapshot by its bytes', () => {
+      const bytes = encode(
+        [bus('a', 'T', 'v1', 1), bus('b', 'U', 'v2', 2), bus('c', 'T', 'v3', 3)],
+        999,
+      );
+      const ranges = entityRanges(bytes)!;
+      expect(ranges).toHaveLength(3);
+      const entities = ranges.map((r) =>
+        transit_realtime.FeedEntity.decode(bytes.subarray(r.offset, r.offset + r.length)),
+      );
+      expect(entities.map((e) => e.id)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('walks fields it does not know and refuses bytes it cannot walk', () => {
+      const base = encode([bus('a', 'T', 'v1', 1)], 999);
+      // field 20, varint 5; field 21, fixed32; field 22, fixed64; field 23, a 3-byte string
+      const extra = Uint8Array.from([
+        0xa0, 0x01, 5, 0xad, 0x01, 1, 2, 3, 4, 0xb1, 0x01, 1, 2, 3, 4, 5, 6, 7, 8, 0xba, 0x01, 3, 7,
+        8, 9,
+      ]);
+      const withExtra = Uint8Array.from([...base, ...extra]);
+      expect(entityRanges(withExtra)).toHaveLength(1);
+      // a group start (wire type 3), a truncated length, a truncated varint, a length past the end
+      expect(entityRanges(Uint8Array.from([...base, 0x7b, 0x7c]))).toBeNull();
+      expect(entityRanges(Uint8Array.from([...base, 0x12, 0x40, 1]))).toBeNull();
+      expect(entityRanges(Uint8Array.from([...base, 0x80]))).toBeNull();
+      expect(entityRanges(Uint8Array.from([...base, 0xad, 0x01, 1]))).toBeNull();
+    });
+
+    it('still reads pings from a snapshot whose bytes cannot be walked, from their own bytes', () => {
+      const h = harness({ now: NOW });
+      const base = encode([bus('a', 'T', 'v1', 100), bus('b', 'T', 'v2', 200)], 999);
+      // an unknown group field (15) the decoder skips but the byte walk refuses
+      const bytes = Uint8Array.from([...base, 0x7b, 0x7c]);
+      h.snapshots.add('vehiclePositions', bytes, decodeFeed(bytes));
+      expect(h.pings.forTrip('T').map((p) => [p.sequence, p.vehicleId, p.timestamp])).toEqual([
+        [1, 'v1', 100],
+        [2, 'v2', 200],
+      ]);
+    });
+
+    it('keeps the latest snapshot of each feed, with its pings, whatever the limit', () => {
+      // 20 000 vehicles a snapshot, a limit that fits less than one snapshot with its index
+      const limit = 2 * 2 ** 20;
+      const h = harness({ now: NOW, memoryLimitBytes: limit });
+      const vehicles = (k: number) =>
+        Array.from({ length: 20_000 }, (_, i) =>
+          bus(`e${i}`, `t${i % 500}`, `bus-${i}`, 1_700_000_000 + k * 15),
+        );
+      for (let k = 0; k < 4; k++) {
+        h.clock.advance(15_000);
+        h.push('tripUpdates', [update('u', { trip: { tripId: 'x' } })]);
+        h.push('vehiclePositions', vehicles(k));
+        expect(h.snapshots.latest('vehiclePositions')).not.toBeNull();
+        expect(h.snapshots.latest('tripUpdates')).not.toBeNull();
+        // history is down to the latest snapshots, and their pings are all there
+        expect(h.snapshots.all('vehiclePositions')).toHaveLength(1);
+        expect(h.snapshots.all('tripUpdates')).toHaveLength(1);
+        expect(h.pings.forTrip('t7')).toHaveLength(40);
+      }
+      expect(h.pings.forTrip('t7').map((p) => p.sequence)).toEqual(
+        Array.from({ length: 40 }, (_, i) => 120 + i + 1),
+      );
+      // with room for a few snapshots, the oldest go first and the index goes with them
+      const roomy = harness({ now: NOW, memoryLimitBytes: 40 * 2 ** 20 });
+      for (let k = 0; k < 12; k++) {
+        roomy.clock.advance(15_000);
+        roomy.push('vehiclePositions', vehicles(k));
+        const total = roomy.snapshots.retainedBytes() + roomy.pings.retainedBytes();
+        expect(total <= 40 * 2 ** 20 || roomy.snapshots.all('vehiclePositions').length === 1).toBe(
+          true,
+        );
+      }
+      const kept = roomy.snapshots.all('vehiclePositions').length;
+      expect(kept).toBeGreaterThan(2);
+      expect(kept).toBeLessThan(12);
+      expect(roomy.pings.forTrip('t7')).toHaveLength(kept * 40);
     });
   });
 
