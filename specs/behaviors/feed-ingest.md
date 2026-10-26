@@ -33,11 +33,12 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
 - While the schedule is not ready, realtime snapshots are still collected; only
   schedule-dependent figures are unavailable.
 - When the load completes, trips whose `frequencies.txt` rows have mixed `exact_times` values
-  (`mixed_exact_times`) and trips whose first and last stop times are unusable
+  (`mixed_exact_times`), trips whose first and last stop times are unusable
   (`unusable_stop_times`: no `stop_times.txt` rows, or no departure or arrival at the first
-  stop, or no arrival or departure at the last) are recorded as configuration errors
-  ([trip-activity](trip-activity.md#schedule-entries)), in `trips.txt` order. A trip with both
-  problems is recorded under both codes. They do not fail the load.
+  stop, or no arrival or departure at the last) and trips with a row that could have too many
+  instances running at once (`frequency_too_dense`) are recorded as configuration errors
+  ([trip-activity](trip-activity.md#schedule-entries)), in `trips.txt` order. A trip with several
+  problems is recorded under each code, in the order listed here. They do not fail the load.
 - A trip listed in `frequencies.txt` keeps its first and last stop time as a template
   ([trip-activity](trip-activity.md#schedule-entries)); `trips.txt` rows referencing a
   `shape_id` absent from `shapes.txt` are kept and simply have no geometry.

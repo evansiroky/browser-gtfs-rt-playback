@@ -8,11 +8,18 @@ an external store, and forgets everything when it goes dormant or shuts down.
 - Snapshots (and the pings derived from them) are kept for at most the **retention window**
   — 60 minutes, measured from each snapshot's server receive time. Older ones are discarded
   as new ones arrive, and no later than the next poll tick.
-- A **memory limit** (default 512 MiB) bounds the realtime history in total. When retained
+- A **memory limit** (default 512 MiB) bounds the realtime history in total: the bytes of the
+  retained snapshots plus an estimate of the bytes of the ping index kept for them. When retained
   history would exceed it, the oldest snapshots are discarded first until it fits, even if
-  they are younger than the retention window. The effective start of history is exposed
+  they are younger than the retention window, except that the latest snapshot of each feed (and
+  its pings) is never discarded, so history exceeds the limit only by what those hold. The
+  effective start of history is exposed
   (`historyStartsAt`, [api/session.md](../api/session.md)) so screens can say when history
   is shorter than the full hour.
+- A ping is not stored as a decoded record: the app keeps its identity, its sequence number, when
+  it was first received and where in a retained snapshot it can be read, and builds its fields
+  from that snapshot when they are asked for. A ping therefore lasts exactly as long as a retained
+  snapshot contains it.
 - Ping sequence numbers keep counting up for the activation; expiring a ping never
   renumbers the others ([data-model](../data-model.md#ping)).
 - Snapshots may be kept in a compact form (for example the raw protobuf bytes) and decoded

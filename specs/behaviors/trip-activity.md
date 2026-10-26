@@ -33,6 +33,10 @@ a trip produces on a service date depends on `frequencies.txt`:
 **Plain trip** (no rows in `frequencies.txt`) — one entry whose span is the trip's start to
 end ([data-model](../data-model.md#scheduled-trip)).
 
+Times in `stop_times.txt` and `frequencies.txt`, and a reference's `start_time`, are GTFS times,
+`H:MM:SS` or `HH:MM:SS`, whose hours may exceed 23 (a time past 24:00:00 is on the next calendar
+day of the service date).
+
 **Frequency trip** (one or more rows in `frequencies.txt`) — its `stop_times.txt` rows are a
 *template*: only their relative offsets matter. The template's **duration** *D* is the last
 stop time minus the first. Each frequency row has a window [*S*, *E*) (`start_time`,
@@ -41,11 +45,14 @@ produces one entry per **instance**, with instance starts *S*, *S* + *H*, *S* + 
 the start is before *E*, for every row, and an instance's span is [start, start + *D*]. The
 row's `exact_times` value is shown to the user as sent but does not change this
 interpretation: headway-based service is treated as if it ran exactly on the headway. An
-instance is identified by its trip ID and start. A row whose `start_time` or `end_time` is not a
-`HH:MM:SS` time, or whose `headway_secs` is not a positive whole number, cannot be interpreted:
-it produces no instances.
+instance is identified by its trip ID and start instant: where overlapping rows, or a window that
+reaches past 24:00:00 and the window of the next service date, produce the same start instant for a
+trip, that is one entry, described by the first such row in the file and placed on the later service
+date. (A plain trip is one entry, identified by its trip ID alone.) A row whose `start_time` or
+`end_time` is not a GTFS time, or whose `headway_secs` is not a positive whole number, cannot be
+interpreted: it produces no instances, and the trip detail still shows its columns.
 
-**Configuration errors** — a trip with either of these problems is a **configuration error**
+**Configuration errors** — a trip with any of these problems is a **configuration error**
 in the schedule:
 
 - `mixed_exact_times`: its `frequencies.txt` rows do not all have the same `exact_times` (an
@@ -53,7 +60,12 @@ in the schedule:
 - `unusable_stop_times`: the span of the trip cannot be computed, because it has no
   `stop_times.txt` rows, or its first stop has neither a departure nor an arrival time, or its
   last stop has neither (so neither the start/end of a plain trip nor the template duration of
-  a frequency trip exists).
+  a frequency trip exists);
+- `frequency_too_dense`: a readable row could have more than 2,000 instances running at the same
+  time, that is, with *D* the template duration (0 if negative) and *H* the row's headway,
+  ceil((*D* + 60 s) / *H*) is above 2,000. The app refuses to enumerate that many concurrent
+  entries ([Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience)).
+  A trip without a template is not checked.
 
 Such a trip produces **no schedule entries**: it is not counted, not active, and
 not listed in lists 1 or 2. The error is reported to the user
@@ -86,8 +98,8 @@ starting at exactly that time), then one on which the trip operates, else today.
 candidate dates qualify at a step, the later one wins, as for an entry's own service date. Its
 **start** is its `start_time` interpreted on that service date, when present. A `start_date`
 that is not a calendar date written `YYYYMMDD` counts as absent, so the date is inferred; a
-`start_time` that is not a `HH:MM:SS` time is still shown as sent but names no instant, so it
-equals no instance start.
+`start_time` that is not a GTFS time is still shown as sent but names no instant, so it equals no
+instance start. A vehicle position `timestamp` of 0 counts as absent.
 
 A reference **matches** an entry when it has the same trip ID, the same service date, and:
 
@@ -109,7 +121,7 @@ Lists 1 and 2 hold active entries; list 3 holds references.
    group name different service dates, the row takes the latest. Each carries a **reason**,
    the first that applies:
    - `unknown_trip` — the trip ID does not exist in `trips.txt`;
-   - `configuration_error` — the trip has a configuration error (either code above);
+   - `configuration_error` — the trip has a configuration error (any code above);
    - `not_in_service` — the trip exists but does not operate on the reference's service date;
    - `missing_start_time` — the trip is a frequency trip and the reference has no
      `start_time` (absent or empty), so no instance can be identified;
@@ -138,7 +150,9 @@ they are counted, not hidden, just not linkable).
 | Active trips with realtime data | size of list 1 |
 
 A statistic that depends on an unconfigured feed, a feed with no successful snapshot yet,
-or a schedule that is not ready is unavailable (null) rather than zero.
+or a schedule that is not ready is unavailable (null) rather than zero. "Active trips with
+realtime data" depends on exactly the configured realtime feeds, each of which must have a
+snapshot.
 
 ## Ordering
 Lists 1 and 2: by start (earliest first), then trip ID. List 3: by reason in the order listed

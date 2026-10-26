@@ -46,8 +46,9 @@ setting, never its value:
 - The map tile host is an `http` or `https` origin: no path, query or credentials.
 - A feed URL with credentials before the host (`https://user:pass@host/…`) is refused;
   credentials belong in the query string.
-- The realtime history memory limit holds at least two maximum-size realtime responses, so
-  each feed's latest snapshot always fits.
+- The realtime history memory limit holds at least two maximum-size realtime responses, so the
+  history can keep an older snapshot beside a feed's latest. Each feed's latest snapshot is kept
+  whatever the limit ([data-retention](data-retention.md)).
 
 The retention default is also a ceiling: configuration may lower it but the server clamps
 any value above 60 minutes to 60 ([Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience)).

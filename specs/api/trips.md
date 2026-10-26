@@ -21,7 +21,7 @@ generatedAt: epoch seconds
 trips: [{
   tripId:       string
   serviceDate:  "YYYYMMDD"                           // derived, informational
-  routeId:      string | null                        // from trips.txt, else the realtime reference
+  routeId:      string | null                        // from trips.txt (empty counts as none), else the realtime reference
   routeShortName: string | null                      // from the routes.txt row for routeId, even when the
                                                      // trip is unknown; null if routeId is null or not in routes.txt
   routeLongName:  string | null
@@ -39,7 +39,7 @@ trips: [{
     hasVehiclePosition: boolean
     hasTripUpdate:      boolean
     startTime:       string | null                   // the reference's start_time, as sent
-    lastSeenAt:      epoch seconds | null            // newest vehicle timestamp, else feed timestamp
+    lastSeenAt:      epoch seconds | null            // newest vehicle timestamp (0 counts as none), else feed timestamp
   } | null
   reason: "unknown_trip" | "configuration_error" | "not_in_service" | "missing_start_time"
         | "unmatched_start_time" | "outside_scheduled_time" | null   // list 3 only
@@ -57,8 +57,8 @@ positions before trip updates, in feed order.
 ## Detail
 `GET /api/v1/trips/{tripId}` — `tripId` is percent-encoded. **No query parameters are
 accepted**; any query parameter, `serviceDate` included, → `400 bad_request`. `409` statuses
-as for the list. `404 trip_not_found` when the trip ID is neither in the schedule nor present
-in any retained realtime data.
+as for the list. `404 trip_not_found` when the trip ID is neither in the schedule nor in the latest
+snapshots nor in any retained ping.
 
 The response describes the trip as it stands now, over everything retained for the trip ID:
 all its pings in the window (every vehicle, every frequency instance), whichever lists it is
@@ -84,20 +84,20 @@ scheduled: {                                         // null when the trip ID is
   frequencies: [{                                    // null for plain trips
     row:         { [column: string]: string }        // every column of the frequencies.txt row
     exactTimes:  boolean                             // as sent (absent = false); informational only
-    headwaySecs: integer
-    windowStart: epoch seconds
-    windowEnd:   epoch seconds
+    headwaySecs: integer | null                     // null (with the window) when the row cannot be read
+    windowStart: epoch seconds | null
+    windowEnd:   epoch seconds | null
     templateDurationSecs: integer | null            // null when the trip has unusable_stop_times
     activeNow:   boolean
     activeInstanceStarts: epoch seconds[]            // nominal instances overlapping now; empty if misconfigured
   }] | null
-  configurationErrors: [{ code: "mixed_exact_times" | "unusable_stop_times", message: string }]   // empty when none
+  configurationErrors: [{ code: "mixed_exact_times" | "unusable_stop_times" | "frequency_too_dense", message: string }]   // empty when none
 } | null
 realtime: {
   pings: [{                                         // ascending by sequence; retained window only
     sequence:    integer                            // see data-model: ping sequence
     receivedAt:  epoch seconds                      // when the server first received it
-    timestamp:   epoch seconds                      // vehicle timestamp (or feed header fallback)
+    timestamp:   epoch seconds                      // vehicle timestamp (0 counts as none), else feed header timestamp, else receive time
     vehicleId:   string
     vehicleLabel: string | null
     licensePlate: string | null
@@ -129,6 +129,8 @@ realtime: {
   } | null
 }
 ```
+A frequency row that cannot be read ([trip-activity](../behaviors/trip-activity.md#schedule-entries))
+is listed with its columns, `activeNow` false and no active instances, and its unreadable values null.
 Other `VehiclePosition` fields present in the feed are passed through under their GTFS-RT
 names in camelCase so the screen can show "other info as available". Pings include every
 retained ping for the trip ID, including pings from vehicles no longer reporting. When the
