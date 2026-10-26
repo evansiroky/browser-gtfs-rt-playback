@@ -42,9 +42,12 @@ readonly APPLY_SA_ID="tf-apply"
 readonly APPLY_TARGET="refs/heads/main"
 readonly WIF_USER_ROLE="roles/iam.workloadIdentityUser"
 
+# serviceUsageConsumer lets tf-plan send the quota-project header Terraform's billing
+# budget calls carry (permission serviceusage.services.use). It grants no data access.
 PLAN_PROJECT_ROLES=(
   "roles/viewer"
   "roles/iam.securityReviewer"
+  "roles/serviceusage.serviceUsageConsumer"
 )
 APPLY_PROJECT_ROLES=(
   "roles/run.admin"
@@ -75,6 +78,7 @@ REQUIRED_APIS=(
   "cloudresourcemanager.googleapis.com"
   "serviceusage.googleapis.com"
   "billingbudgets.googleapis.com"
+  "cloudbilling.googleapis.com"
   "storage.googleapis.com"
 )
 # Arrays are made read-only separately: `readonly name=(...)` misbehaves in bash 3.2.
