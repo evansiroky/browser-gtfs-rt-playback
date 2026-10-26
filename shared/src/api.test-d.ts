@@ -119,11 +119,15 @@ describe('dashboard.md', () => {
       } | null;
       configurationErrors: {
         total: number;
-        items: { code: 'mixed_exact_times'; tripId: string; message: string }[];
+        items: {
+          code: 'mixed_exact_times' | 'unusable_stop_times';
+          tripId: string;
+          message: string;
+        }[];
       } | null;
     }>();
     expectTypeOf<typeof CONFIGURATION_ERROR_CODES>().toEqualTypeOf<
-      readonly ['mixed_exact_times']
+      readonly ['mixed_exact_times', 'unusable_stop_times']
     >();
   });
 });
@@ -226,7 +230,7 @@ describe('trips.md: detail', () => {
       activeNow: boolean;
       shapeId: string | null;
       frequencies: TripFrequencyDetail[] | null;
-      configurationErrors: { code: 'mixed_exact_times'; message: string }[];
+      configurationErrors: { code: 'mixed_exact_times' | 'unusable_stop_times'; message: string }[];
     }>();
   });
 
