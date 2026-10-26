@@ -205,8 +205,39 @@ resources, and that no key is ever created.
 
 ```bash
 scripts/test/run-tests.sh
-shellcheck scripts/*.sh scripts/test/*.sh scripts/test/fake-bin/gcloud scripts/test/fake-tf/terraform
+shellcheck scripts/*.sh scripts/test/*.sh scripts/test/fake-bin/gcloud scripts/test/fake-bin/docker \
+  scripts/test/fake-tf/terraform
 ```
 
 If `shellcheck` is not installed: `pip install shellcheck-py`.
 `scripts/.shellcheckrc` lets it follow `source lib.sh`.
+
+## Container smoke test
+
+`container-smoke.sh <image> [--port N]` is a post-build check of the image built from the root
+`Dockerfile` (see the root README). It needs only `docker` and `curl`, and is meant for CI and for
+a local `docker build`; it is independent of the bootstrap scripts. It runs the image with
+placeholder feed URLs on reserved `.invalid` hosts (the server must start and answer anyway) and
+publishes host port `N` (default 18080) on `127.0.0.1` only, mapped to the container's 8080. Checks, each reported as `ok`/`FAIL`:
+
+- `GET /` is 200, serves the web app HTML and carries a `Content-Security-Policy` header;
+- `GET /trips/x` returns the same HTML (client-side route fallback);
+- `GET /assets/<missing>` is 404;
+- `POST /api/v1/session/start` returns JSON whose `state` is `active`;
+- the process does not run as root (`docker exec ... id -u`);
+- `docker stop -t 10` (SIGTERM) leaves exit code 0 within 8 s (the server's own drain is 5 s);
+- the container log contains no feed URL, host or key fragment.
+
+The exit status is non-zero if any check fails (2 for a usage error). The container is always
+removed, also after a failed run. `SMOKE_READY_TIMEOUT_S` (default 30) is how long to wait for the first
+answer.
+
+`scripts/test/container-smoke-tests.sh` tests the script's own logic against `scripts/test/fake-bin/docker`,
+a fake that runs an app natively instead of a container: the built server for the passing case
+(run `npm run build` first) and `scripts/test/fake-app.mjs`, a stub with switchable defects, for the
+rest. The fake models port publishing (the app listens on 8080 like the image, so only a `-p` to
+container port 8080 is reachable). The tests cover a conforming server and every check failing on
+its own (status, HTML, CSP, `/trips/x`, missing asset, session state, root, `SIGTERM` exit code and
+speed, each kind of log leak, an empty log), the loopback publish and `stop -t 10` calls, cleanup
+of the container after a failed run, and usage errors. It cannot show that the real image builds or behaves the same; that is what running
+`container-smoke.sh` against a real image is for.
