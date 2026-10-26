@@ -1,0 +1,278 @@
+# Infrastructure (specs/deployment.md "Infrastructure"): Terraform for infra/.
+#   pull request  -> fmt -check, validate and plan as the read-only `tf-plan` identity, posted as ONE
+#                    pull-request comment that later pushes update;
+#   push to main  -> plan, then apply, as the `tf-apply` identity.
+#
+# Security: same-repo pull requests run THIS FILE FROM THE PULL REQUEST, so its author controls what
+# the plan job does. That is why the pull-request path can only ever reach `tf-plan` (the Workload
+# Identity member for it is `<this file>:pr` and the identity is read-only), and why `tf-apply` is
+# bound to `<this file>:refs/heads/main`, which a pull request can never present. The apply job
+# additionally cannot be scheduled for anything but a push to main. There is no pull_request_target
+# trigger and no workflow_dispatch. Fork pull requests get no OIDC token, so they skip the plan.
+#
+# Plans run WITHOUT the state lock (-lock=false) on purpose: a pull request must not be able to
+# hold the lock and block an apply on main. Residual risk: `tf-plan` may write Terraform lock objects
+# (*.tflock), so a malicious workflow could still create one. Recover with
+# `terraform -chdir=infra force-unlock <lock-id>` (the ID is in the error message of the blocked run).
+name: Infrastructure
+
+on:
+  pull_request:
+    paths:
+      - infra/**
+      - .github/workflows/infra.yml
+  push:
+    branches: [main]
+    paths:
+      - infra/**
+      - .github/workflows/infra.yml
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  # Pull requests from forks get no OIDC token and no write token, so there is nothing to plan with.
+  skip-fork:
+    name: Plan (skipped for fork)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - run: echo "::notice::Pull requests from forks get no cloud credentials, so no Terraform plan is made. CI still validates the Terraform."
+
+  plan:
+    name: Plan (read-only)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: infra-plan-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      exitcode: ${{ steps.plan.outputs.exitcode }}
+    env:
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_github_repository: ${{ github.repository }}
+      TF_VAR_wif_pool: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github
+    steps:
+      - name: Require the repository variables
+        env:
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+        run: |
+          missing=0
+          for name in TF_STATE_BUCKET TF_VAR_project_id TF_VAR_region GCP_PROJECT_NUMBER; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::A repository variable behind $name is not set (GCP_PROJECT_ID, GCP_PROJECT_NUMBER, GCP_REGION, TF_STATE_BUCKET). Bootstrap prints them; see the README, section CI/CD."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: actions/checkout@v4 # major-version pin, kept current by .github/dependabot.yml
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.7 # infra/ needs >= 1.11; this is the version it was validated with
+          terraform_wrapper: false
+
+      # Before authenticating: a formatting error needs no cloud access.
+      - run: terraform fmt -check -recursive -diff infra
+
+      - uses: google-github-actions/auth@v2 # major-version pin, kept current by .github/dependabot.yml
+        with:
+          workload_identity_provider: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/github
+          service_account: tf-plan@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+
+      - run: terraform -chdir=infra init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+
+      - run: terraform -chdir=infra validate
+
+      # -detailed-exitcode: 0 no changes, 1 error, 2 changes. The text goes to a file for the comment job.
+      - name: Plan
+        id: plan
+        env:
+          PLAN_FILE: ${{ runner.temp }}/plan.txt
+        run: |
+          code=0
+          terraform -chdir=infra plan -input=false -no-color -lock=false -detailed-exitcode > "$PLAN_FILE" 2>&1 || code=$?
+          cat "$PLAN_FILE"
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          [[ $code -ne 1 ]]
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: terraform-plan
+          path: ${{ runner.temp }}/plan.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The only job with pull-request write access. It holds no cloud credentials and runs no code from infra/.
+  comment:
+    name: Plan comment
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: terraform-plan
+          path: ${{ runner.temp }}/plan
+      - uses: actions/github-script@v7
+        env:
+          PLAN_FILE: ${{ runner.temp }}/plan/plan.txt
+          PLAN_EXIT: ${{ needs.plan.outputs.exitcode }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- gtfs-rt-debugger-terraform-plan -->';
+            const limit = 60000; // GitHub rejects comments over 65536 characters
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            let plan = '';
+            try {
+              plan = fs.readFileSync(process.env.PLAN_FILE, 'utf8');
+            } catch (error) {
+              plan = '';
+            }
+            let note = '';
+            if (plan.length > limit) {
+              note = `\n\n_The plan is longer than a comment can hold: showing the first ${limit} of ${plan.length} characters. See the full output in the [workflow run](${runUrl})._`;
+              plan = plan.slice(0, limit);
+            }
+
+            let status;
+            if (process.env.PLAN_RESULT !== 'success') {
+              status = 'Terraform plan **failed** (or did not run). See the [workflow run](' + runUrl + ').';
+            } else if (process.env.PLAN_EXIT === '2') {
+              status = 'Terraform plan: **changes** to apply when this merges.';
+            } else {
+              status = 'Terraform plan: **no changes**.';
+            }
+
+            // Plan output is untrusted text: a fence longer than any backtick run inside it keeps it inert.
+            const longest = Math.max(2, ...(plan.match(/`+/g) || []).map((run) => run.length));
+            const fence = '`'.repeat(longest + 1);
+            const sha = context.payload.pull_request.head.sha;
+            const body = [
+              marker,
+              '### Terraform plan',
+              status,
+              plan ? `${fence}\n${plan}\n${fence}${note}` : '_No plan output was produced._',
+              `<sub>Commit ${sha.slice(0, 7)} · [workflow run](${runUrl})</sub>`,
+            ].join('\n\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) => comment.user.login === 'github-actions[bot]' && comment.body.includes(marker),
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  # Push to main only. Stands down when a newer commit on main already changed infra/ (that commit's own
+  # run applies it, and it contains this one), so an older run can never apply old configuration over new.
+  fresh:
+    name: Check this run is current
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      stale: ${{ steps.check.outputs.stale }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: check
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          if git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- infra .github/workflows/infra.yml; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::A newer commit on main changed the infrastructure; its run applies it."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  apply:
+    name: Plan and apply
+    needs: fresh
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.fresh.outputs.stale == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    # Applies are serialized and never cancelled mid-flight.
+    concurrency:
+      group: infra-apply
+      cancel-in-progress: false
+    env:
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_github_repository: ${{ github.repository }}
+      TF_VAR_wif_pool: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github
+    steps:
+      - name: Require the repository variables
+        env:
+          GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+        run: |
+          missing=0
+          for name in TF_STATE_BUCKET TF_VAR_project_id TF_VAR_region GCP_PROJECT_NUMBER; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::A repository variable behind $name is not set (GCP_PROJECT_ID, GCP_PROJECT_NUMBER, GCP_REGION, TF_STATE_BUCKET). Bootstrap prints them; see the README, section CI/CD."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.7
+          terraform_wrapper: false
+
+      - run: terraform fmt -check -recursive -diff infra
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/github
+          service_account: tf-apply@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+
+      - run: terraform -chdir=infra init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+
+      - run: terraform -chdir=infra validate
+
+      - run: terraform -chdir=infra plan -input=false -no-color -out=tfplan
+
+      - run: terraform -chdir=infra apply -input=false -no-color tfplan
