@@ -1,0 +1,29 @@
+# Keep the build context to what the Dockerfile copies: package manifests, the lockfile,
+# tsconfig.base.json and the sources of shared/, server/ and web/.
+
+# Dependencies and build output are produced inside the image.
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+
+# Version control, local state and secrets.
+.git
+.env
+.env.*
+**/.terraform
+**/*.tfstate*
+**/*.tfvars
+
+# Not part of the image.
+specs
+plans
+.agents
+.claude
+.github
+e2e
+fixtures
+infra
+scripts
+skills-lock.json
+**/*.md
