@@ -1,0 +1,16 @@
+{
+  "name": "@gtfs-rt-debugger/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "e2e": "vitest run"
+  },
+  "devDependencies": {
+    "@gtfs-rt-debugger/fixtures": "^0.0.0",
+    "@gtfs-rt-debugger/shared": "*",
+    "playwright-core": "1.63.0"
+  }
+}
