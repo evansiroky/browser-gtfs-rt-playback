@@ -11,10 +11,10 @@ Governing principle: [Cost ceiling beats convenience](principles.md#cost-ceiling
 
 | Resource | Rule |
 |---|---|
-| Cloud Run service | One service. **Max instances 1** (a second process must never run: all state is in one process's memory), **min instances 0**, **CPU always allocated** (the 10 s poller runs between requests), 1 vCPU and 2 GiB memory, request concurrency 80, the container port taken from the platform. Region default `us-west1`, a single variable. |
+| Cloud Run service | One service. **Max instances 1** (one process holds all state in memory, so never more than one serves at a time; the limit is per revision, so during a deploy the old and new revision may briefly overlap, and the new one starts empty), **min instances 0**, **CPU always allocated** (the 10 s poller runs between requests), 1 vCPU and 2 GiB memory, request concurrency 80, the container port taken from the platform. Region default `us-west1`, a single variable. |
 | Public access | The service is invokable by anyone without authentication (it is a public site). |
 | Runtime service account | Dedicated; its only grant is access to the feed-URL secrets. No project-level roles. |
-| Secret Manager secrets | One secret per feed URL (schedule, vehicle positions, trip updates). Terraform creates the empty secrets; the operator adds the values out-of-band, so feed URLs and any embedded keys never enter Terraform state, variables, or CI logs. The service reads them as environment variables. |
+| Secret Manager secrets | One secret per feed URL (schedule, vehicle positions, trip updates). Cloud Run cannot create a service whose secret has no version, so Terraform creates each secret with a **placeholder** first version (a syntactically valid URL on a reserved `.invalid` host, never a real value); the operator then adds the real URL as a new version (`gcloud secrets versions add`), which the service reads at its next start. Terraform never manages the real versions, so feed URLs and any embedded keys never enter Terraform state, variables, or CI logs. The service reads the secrets as environment variables (`latest` version). |
 | Artifact Registry | One Docker repository in the same region, with a cleanup policy keeping only the most recent images. |
 | Billing budget | A budget on the project with alert thresholds at 50 %, 90 %, and 100 % of a monthly amount (variable, default 25 USD), delivered to billing administrators. |
 | Non-secret configuration | The tunables in [behaviors/configuration.md](behaviors/configuration.md#tunables-and-defaults) are Terraform variables passed to the service as environment variables, with exit-on-idle on. |
@@ -50,8 +50,9 @@ nothing that exists. It:
 1. Verifies the project exists, billing is linked (and says how to link it if not), and the
    GitHub repository value is a full `owner/repo`.
 2. Enables the APIs Terraform and the pipeline need (Cloud Run, Artifact Registry, Secret
-   Manager, IAM, IAM Credentials, STS, Cloud Resource Manager, Service Usage, Cloud Billing
-   Budget, Cloud Storage). Cloud Build is not used: images are built in CI.
+   Manager, IAM, IAM Credentials, STS, Cloud Resource Manager, Service Usage, Cloud Billing,
+   Cloud Billing Budget, Cloud Storage). Cloud Billing lets Terraform find the project's billing
+   account, so the budget needs no extra input. Cloud Build is not used: images are built in CI.
 3. Creates the versioned Terraform state bucket.
 4. Creates the Workload Identity Federation pool and GitHub OIDC provider, restricted to the
    one GitHub repository, with an attribute that combines the workflow file and the ref so
@@ -59,7 +60,8 @@ nothing that exists. It:
    requests). No service account keys are ever created.
 5. Creates two Terraform identities and binds them: a **plan** identity, read-only apart
    from the state lock — it can read project state and the billing budget, and its only write
-   access in the state bucket is to Terraform lock objects — impersonable only by the
+   access in the state bucket is to Terraform lock objects; it may also use the project's APIs
+   (the service-usage consumer role, needed to plan the budget) — impersonable only by the
    infrastructure workflow on pull requests;
    and an **apply** identity with the roles to manage the resources above, impersonable only
    by the infrastructure workflow on `main`. The apply identity is also given the narrow

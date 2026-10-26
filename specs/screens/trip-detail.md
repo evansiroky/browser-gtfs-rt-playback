@@ -34,8 +34,9 @@ several labels, and none if it is in no list). A link back to the dashboard.
   of its nominal instances active now. Rows with `exact_times` absent or `0` carry a note that
   departures are assumed to be exactly on the headway.
 - Each entry of `scheduled.configurationErrors` is shown as a prominent error stating the
-  problem ("This trip's frequencies.txt rows mix exact_times values, so its activity cannot be
-  determined and it is excluded from schedule counts") above the tables, which still show the
+  problem in words that name the cause (mixed `exact_times` values in its frequencies.txt rows,
+  or stop times from which its start and end cannot be computed) and that its activity cannot
+  be determined, so it is excluded from schedule counts, above the tables, which still show the
   rows as they are in the feed.
 When `scheduled` is null the section says the trip ID is not in the schedule.
 

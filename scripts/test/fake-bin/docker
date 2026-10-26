@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Fake docker for scripts/test/container-smoke-tests.sh. There is no container: `run` starts an app
+# natively and implements only the commands scripts/container-smoke.sh uses; anything else fails
+# loudly (exit 99). The app is the built server (cwd $FAKE_DOCKER_SERVER_DIR, which holds server/dist
+# and web/dist, the layout of the image's /app) or, with FAKE_DOCKER_APP=stub, test/fake-app.mjs.
+#
+# Port publishing is modelled: the app listens on its in-container port ($FAKE_DOCKER_APP_PORT, else
+# the PORT passed with -e, else 8080, the image's default). Only `-p [ip:]host:container` with that
+# container port is reachable, on the host port; any other mapping leaves the app unreachable.
+#
+# State under $FAKE_DOCKER_STATE: calls.log (every call), pids.log (every app pid), and
+# containers/<name>/{pid,code,log,env,stopped} for each container.
+# Knobs (environment): FAKE_DOCKER_APP=stub, FAKE_DOCKER_APP_PORT, FAKE_DOCKER_UID (answer of
+# `exec id -u`, default 1000; "fail" makes the exec fail), FAKE_DOCKER_WEB_DIST_DIR (overrides
+# WEB_DIST_DIR), FAKE_DOCKER_DIE=1 (the container exits 1 at once). Every FAKE_APP_* variable is
+# passed to the app.
+set -euo pipefail
+
+STATE=${FAKE_DOCKER_STATE:?FAKE_DOCKER_STATE must be set}
+SERVER_DIR=${FAKE_DOCKER_SERVER_DIR:?FAKE_DOCKER_SERVER_DIR must be set}
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+mkdir -p "$STATE/containers"
+printf 'docker %s\n' "$*" >>"$STATE/calls.log"
+
+unsupported() {
+  printf 'fake docker: unsupported command: docker %s\n' "$*" >&2
+  exit 99
+}
+
+cmd=${1:-}
+shift || true
+
+case $cmd in
+  run)
+    name=""
+    spec=""
+    envs=()
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        -d) shift ;;
+        --name)
+          name=$2
+          shift 2
+          ;;
+        -p)
+          spec=$2
+          shift 2
+          ;;
+        -e)
+          envs+=("$2")
+          shift 2
+          ;;
+        -*) unsupported run "$@" ;;
+        *) shift ;; # the image
+      esac
+    done
+    [[ -n $name && -n $spec ]] || unsupported run
+    container_port=${spec##*:}
+    host_port=${spec%:*}
+    host_port=${host_port##*:}
+
+    app_port=${FAKE_DOCKER_APP_PORT:-8080}
+    if [[ -z ${FAKE_DOCKER_APP_PORT:-} ]]; then
+      for e in ${envs[@]+"${envs[@]}"}; do
+        [[ $e == PORT=* ]] && app_port=${e#PORT=}
+      done
+    fi
+
+    dir=$STATE/containers/$name
+    mkdir -p "$dir"
+    printf '%s\n' ${envs[@]+"${envs[@]}"} >"$dir/env"
+    # The app really listens on the host port when the mapping reaches it, else on a free one.
+    app_env=()
+    if [[ $container_port == "$app_port" ]]; then
+      app_env+=("PORT=$host_port")
+    else
+      app_env+=("PORT=0")
+    fi
+    for v in $(compgen -e | grep '^FAKE_APP_' || true); do
+      app_env+=("$v=${!v}")
+    done
+    if [[ -n ${FAKE_DOCKER_WEB_DIST_DIR:-} ]]; then
+      app_env+=("WEB_DIST_DIR=$FAKE_DOCKER_WEB_DIST_DIR")
+    fi
+    if [[ ${FAKE_DOCKER_DIE:-0} == 1 ]]; then
+      program=(bash -c 'echo "fatal: cannot start" >&2; exit 1')
+    elif [[ ${FAKE_DOCKER_APP:-real} == stub ]]; then
+      program=(node "$HERE/../fake-app.mjs")
+    else
+      program=(node server/dist/main.js)
+    fi
+    # Detached supervisor: records the pid, and the exit code when the process ends.
+    # shellcheck disable=SC2016  # the supervisor's script is meant to expand in its own shell
+    bash -c '
+      cd "$1"
+      shift
+      dir=$1
+      shift
+      env -i PATH="$PATH" "$@" >"$dir/log" 2>&1 &
+      pid=$!
+      echo "$pid" >"$dir/pid"
+      rc=0
+      wait "$pid" || rc=$?
+      echo "$rc" >"$dir/code"
+    ' _ "$SERVER_DIR" "$dir" ${envs[@]+"${envs[@]}"} "${app_env[@]}" "${program[@]}" \
+      </dev/null >/dev/null 2>&1 &
+    for _ in $(seq 100); do
+      [[ -s $dir/pid ]] && break
+      sleep 0.05
+    done
+    cat "$dir/pid" >>"$STATE/pids.log"
+    echo "fake-container-id-$name"
+    ;;
+  inspect)
+    [[ ${1:-} == --format ]] || unsupported inspect "$@"
+    format=$2
+    dir=$STATE/containers/$3
+    [[ -d $dir ]] || {
+      echo "Error: No such object: $3" >&2
+      exit 1
+    }
+    case $format in
+      '{{.State.Running}}')
+        if [[ -s $dir/code ]]; then echo false; else echo true; fi
+        ;;
+      '{{.State.ExitCode}}')
+        cat "$dir/code" 2>/dev/null || echo 0
+        ;;
+      *) unsupported inspect "$@" ;;
+    esac
+    ;;
+  exec)
+    [[ ${2:-} == id && ${3:-} == -u ]] || unsupported exec "$@"
+    [[ ${FAKE_DOCKER_UID:-1000} != fail ]] || exit 126
+    echo "${FAKE_DOCKER_UID:-1000}"
+    ;;
+  logs)
+    cat "$STATE/containers/$1/log"
+    ;;
+  stop)
+    [[ ${1:-} == -t ]] || unsupported stop "$@"
+    grace=$2
+    dir=$STATE/containers/$3
+    if [[ ! -s $dir/code ]]; then
+      kill -TERM "$(cat "$dir/pid")" 2>/dev/null || true
+      for _ in $(seq $((grace * 10))); do
+        [[ -s $dir/code ]] && break
+        sleep 0.1
+      done
+      if [[ ! -s $dir/code ]]; then
+        kill -KILL "$(cat "$dir/pid")" 2>/dev/null || true
+        echo 137 >"$dir/code"
+      fi
+    fi
+    echo "$3"
+    ;;
+  rm)
+    [[ ${1:-} == -f ]] || unsupported rm "$@"
+    dir=$STATE/containers/$2
+    if [[ -s $dir/pid && ! -s $dir/code ]]; then
+      kill -KILL "$(cat "$dir/pid")" 2>/dev/null || true
+      for _ in $(seq 40); do
+        [[ -s $dir/code ]] && break
+        sleep 0.05
+      done
+    fi
+    rm -rf "$dir"
+    ;;
+  *) unsupported "$cmd" "$@" ;;
+esac

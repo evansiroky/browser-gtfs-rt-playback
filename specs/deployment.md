@@ -22,7 +22,9 @@ Registry, and deploy that image to the Cloud Run service. Deploys are serialized
 time, never cancelled mid-flight). A deploy never changes the service's infrastructure
 settings, secrets, or environment variables — those belong to Terraform. Rolling back means
 deploying an earlier commit's image, available as a manually triggered run that takes a
-commit SHA.
+commit SHA. The registry keeps only the 10 most recent image versions and nothing older than
+7 days beyond them ([infrastructure.md](infrastructure.md)), so a rollback to an older commit
+rebuilds that commit's image first (or fails with a clear message if it cannot).
 
 ### Infrastructure (changes under `infra/` or the infra workflow)
 - **Pull request:** `terraform fmt -check`, `validate`, and `plan`, using the read-only plan

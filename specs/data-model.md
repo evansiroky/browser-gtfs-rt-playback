@@ -19,7 +19,9 @@ midnight today. A service date is always **derived** by the app
 A row of `trips.txt` plus the service dates on which its `service_id` operates (from
 `calendar.txt` and `calendar_dates.txt`, exceptions applied), plus two derived instants per
 service date: **start** (first stop time's departure, or arrival if no departure) and
-**end** (last stop time's arrival, or departure if no arrival). The full `trips.txt` row and
+**end** (last stop time's arrival, or departure if no arrival; a trip for which either does not
+exist is a configuration error, [trip-activity](behaviors/trip-activity.md#schedule-entries)). The
+full `trips.txt` row and
 its `routes.txt` row are retained as-is (all columns), as are the trip's `frequencies.txt`
 rows. A trip's `shape_id` links to its shape.
 

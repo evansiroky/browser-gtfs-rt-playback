@@ -65,7 +65,7 @@ new_project() {
 # enable_all_apis: as after a completed bootstrap (or an operator who enabled them).
 enable_all_apis() {
   printf '%s.googleapis.com\n' run artifactregistry secretmanager iam iamcredentials sts \
-    cloudresourcemanager serviceusage billingbudgets storage >"$S/services"
+    cloudresourcemanager serviceusage billingbudgets cloudbilling storage >"$S/services"
 }
 
 # invoke [VAR=value ...] <script> [args...]: runs scripts/<script> with only the given
@@ -163,7 +163,7 @@ test_bootstrap_creates_everything_in_order() {
     "projects add-iam-policy-binding" "storage buckets add-iam-policy-binding" \
     "service-accounts add-iam-policy-binding" "billing accounts add-iam-policy-binding"
   local api
-  for api in run artifactregistry secretmanager iam iamcredentials sts cloudresourcemanager serviceusage billingbudgets storage; do
+  for api in run artifactregistry secretmanager iam iamcredentials sts cloudresourcemanager serviceusage billingbudgets cloudbilling storage; do
     grep -Fxq "$api.googleapis.com" "$S/services" || fail "API $api.googleapis.com not enabled"
   done
   assert_not_called "cloudbuild"
@@ -183,15 +183,16 @@ test_bootstrap_creates_everything_in_order() {
   [[ $(wc -l <"$S/sa/$PLAN_SA.iam") -eq 1 && $(wc -l <"$S/sa/$APPLY_SA.iam") -eq 1 ]] ||
     fail "each identity must be impersonable by exactly one principal set"
   local role
-  for role in roles/viewer roles/iam.securityReviewer; do
+  for role in roles/viewer roles/iam.securityReviewer roles/serviceusage.serviceUsageConsumer; do
     assert_row project_iam "$role" "serviceAccount:$PLAN_SA"
   done
   for role in roles/run.admin roles/artifactregistry.admin roles/secretmanager.admin roles/iam.serviceAccountAdmin \
     roles/iam.serviceAccountUser roles/serviceusage.serviceUsageConsumer; do
     assert_row project_iam "$role" "serviceAccount:$APPLY_SA"
   done
-  [[ $(grep -c "serviceAccount:$PLAN_SA" "$S/project_iam") -eq 2 ]] || fail "tf-plan has extra project roles"
+  [[ $(grep -c "serviceAccount:$PLAN_SA" "$S/project_iam") -eq 3 ]] || fail "tf-plan has extra project roles"
   ! grep -Eq 'roles/(owner|editor)' <(grep 'serviceAccount:' "$S/project_iam") || fail "an identity got owner/editor"
+  ! grep -Eq "^roles/secretmanager\.[A-Za-z]+${TAB}serviceAccount:$PLAN_SA\$" "$S/project_iam" || fail "tf-plan can read secret values"
   ! grep -q 'storage' "$S/project_iam" || fail "storage roles must be on the state bucket only"
   # tf-apply reads and writes state; tf-plan reads it and may write only lock objects.
   assert_row "buckets/$BUCKET/iam" roles/storage.objectAdmin "serviceAccount:$APPLY_SA"

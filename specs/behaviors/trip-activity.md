@@ -43,9 +43,17 @@ row's `exact_times` value is shown to the user as sent but does not change this
 interpretation: headway-based service is treated as if it ran exactly on the headway. An
 instance is identified by its trip ID and start.
 
-**Configuration error: mixed `exact_times`** — a trip whose `frequencies.txt` rows do not all
-have the same `exact_times` (an absent value counts as `0`) is a **configuration error** in
-the schedule. Such a trip produces **no schedule entries**: it is not counted, not active, and
+**Configuration errors** — a trip with either of these problems is a **configuration error**
+in the schedule:
+
+- `mixed_exact_times`: its `frequencies.txt` rows do not all have the same `exact_times` (an
+  absent value counts as `0`);
+- `unusable_stop_times`: the span of the trip cannot be computed, because it has no
+  `stop_times.txt` rows, or its first stop has neither a departure nor an arrival time, or its
+  last stop has neither (so neither the start/end of a plain trip nor the template duration of
+  a frequency trip exists).
+
+Such a trip produces **no schedule entries**: it is not counted, not active, and
 not listed in lists 1 or 2. The error is reported to the user
 ([api/dashboard.md](../api/dashboard.md), [api/trips.md](../api/trips.md#detail),
 [screens](../screens/dashboard.md)), and realtime references to the trip are listed in list 3

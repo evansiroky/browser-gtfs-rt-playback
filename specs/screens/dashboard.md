@@ -35,9 +35,10 @@ current agency-local date and time.
 
 **Schedule configuration errors** — shown whenever `configurationErrors.total` is above zero,
 independent of the session banner: an error notice stating the number of trips affected
-("N trips have frequencies.txt rows with mixed exact_times and are excluded from the counts
-and lists"), expandable to the trip IDs (each a link to its trip detail), with a note when
-more than the returned items exist. Hidden when there are none.
+("N trips have schedule configuration errors and are excluded from the counts and lists"),
+expandable to the trip IDs, each with the server's message for its error code (for example mixed
+`exact_times` values, or unusable stop times) and a link to its trip detail, with a note when more
+than the returned items exist. Hidden when there are none.
 
 **Realtime statistics** — "Vehicles", "Vehicles with trip IDs", "Trip updates", and "Active
 trips with realtime data". Each shows the last known number. A statistic whose feed is not
