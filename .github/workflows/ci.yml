@@ -4,6 +4,10 @@
 # Security: no cloud credentials and no `id-token` anywhere in this file; every job is read-only.
 # The terraform job validates against the public provider registry without a backend, and the image
 # job builds locally and never pushes. That is what makes it safe to run on any pull request.
+#
+# Called from deploy.yml with `deploy_gate: true`, which leaves out the two jobs that must not gate a
+# deploy: `audit` (depends on a live advisory database, so a merge could fail checks that passed on
+# its pull request) and `image` (the deploy job builds and smoke tests the image it ships).
 name: CI
 
 on:
@@ -11,6 +15,11 @@ on:
   push:
     branches: [main]
   workflow_call:
+    inputs:
+      deploy_gate:
+        description: Run only the checks that gate a deploy (no advisory audit, no image job).
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -28,10 +37,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4 # major-version pin, kept current by .github/dependabot.yml
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -41,19 +50,41 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run format:check
-      # Production dependencies only: a devDependency advisory never blocks a deploy. High and
-      # critical advisories fail the run; lower severities are left to dependabot.
-      - run: npm audit --omit=dev --audit-level=high
+
+  # Informs, never blocks: it reads the live advisory database, so its result can change without a
+  # commit. Production dependencies only; high and critical advisories raise a warning and a summary.
+  audit:
+    name: Dependency advisories (informational)
+    if: ${{ !inputs.deploy_gate }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - id: audit
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+      - name: Report
+        if: steps.audit.outcome == 'failure'
+        run: |
+          echo "::warning::npm audit found high or critical advisories in production dependencies. This does not block the merge or a deploy; see the audit step."
+          echo "### npm audit: advisories found" >> "$GITHUB_STEP_SUMMARY"
+          echo "High or critical advisories exist in production dependencies. Run \`npm audit --omit=dev\` for the list." >> "$GITHUB_STEP_SUMMARY"
 
   scripts:
     name: Bootstrap and smoke-script tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -73,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install actionlint, shellcheck and PyYAML
@@ -93,10 +124,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.16.7 # infra/ needs >= 1.11; this is the version it was validated with
           terraform_wrapper: false
@@ -107,23 +138,15 @@ jobs:
 
   image:
     name: Container image (build only)
+    if: ${{ !inputs.deploy_gate }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
-      # Cloud Run runs linux/amd64 only. Built into the local daemon and never pushed.
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          build-args: GIT_SHA=${{ github.sha }}
-          tags: gtfs-rt-debugger:ci
-          load: true
-          push: false
-          provenance: false
-          sbom: false
+      # Cloud Run runs linux/amd64 only. Built into the local daemon (BuildKit is built in) and never pushed.
+      - name: Build
+        run: docker build --platform linux/amd64 --build-arg GIT_SHA="$GITHUB_SHA" -t gtfs-rt-debugger:ci .
       - name: Smoke test the image
         run: scripts/container-smoke.sh gtfs-rt-debugger:ci
