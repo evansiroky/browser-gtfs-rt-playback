@@ -4,12 +4,13 @@
 # Needs only docker and curl. See scripts/README.md.
 set -euo pipefail
 
-DEFAULT_PORT=8080
+DEFAULT_PORT=18080
 # The server's own drain bound is 5 s; docker stop's grace period is longer, so a server that
 # ignores SIGTERM shows up as exit code 137, and a slow one as a stop that takes too long.
 STOP_GRACE_S=10
 STOP_BOUND_S=8
-READY_TIMEOUT_S=30
+# Seconds to wait for the first answer; tests of this script shorten it.
+READY_TIMEOUT_S=${SMOKE_READY_TIMEOUT_S:-30}
 
 # Marker strings inside the fake feed URLs: none of them may ever reach the container log.
 SECRET_KEY="smoke-secret-key-7f3a91"
@@ -32,7 +33,8 @@ answer) and asserts:
   - no feed URL or secret fragment appears in the container log
 
 Options:
-  --port <host-port>  Host port mapped to the container's port 8080 (default: $DEFAULT_PORT).
+  --port <host-port>  Host port, published on 127.0.0.1 only and mapped to the container's port
+                      8080 (default: $DEFAULT_PORT).
   -h, --help          Show this help.
 USAGE
 }
@@ -109,7 +111,7 @@ running() {
 }
 
 echo "Starting $IMAGE as $NAME on $BASE"
-docker run -d --name "$NAME" -p "$PORT:8080" \
+docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8080" \
   -e "SCHEDULE_URL=$SCHEDULE_URL" \
   -e "VEHICLE_POSITIONS_URL=$VEHICLE_POSITIONS_URL" \
   "$IMAGE" >/dev/null

@@ -218,7 +218,7 @@ If `shellcheck` is not installed: `pip install shellcheck-py`.
 `Dockerfile` (see the root README). It needs only `docker` and `curl`, and is meant for CI and for
 a local `docker build`; it is independent of the bootstrap scripts. It runs the image with
 placeholder feed URLs on reserved `.invalid` hosts (the server must start and answer anyway) and
-maps host port `N` (default 8080) to the container's 8080. Checks, each reported as `ok`/`FAIL`:
+publishes host port `N` (default 18080) on `127.0.0.1` only, mapped to the container's 8080. Checks, each reported as `ok`/`FAIL`:
 
 - `GET /` is 200, serves the web app HTML and carries a `Content-Security-Policy` header;
 - `GET /trips/x` returns the same HTML (client-side route fallback);
@@ -229,11 +229,15 @@ maps host port `N` (default 8080) to the container's 8080. Checks, each reported
 - the container log contains no feed URL, host or key fragment.
 
 The exit status is non-zero if any check fails (2 for a usage error). The container is always
-removed.
+removed, also after a failed run. `SMOKE_READY_TIMEOUT_S` (default 30) is how long to wait for the first
+answer.
 
 `scripts/test/container-smoke-tests.sh` tests the script's own logic against `scripts/test/fake-bin/docker`,
-a fake that runs the built server natively instead of a container (run `npm run build` first). It
-covers a conforming server and each failure the script must catch: running as root, a feed URL in
-the log, a non-zero exit on `SIGTERM`, a missing web app, a container that dies at start, and usage
-errors. It cannot show that the real image builds or behaves the same; that is what running
+a fake that runs an app natively instead of a container: the built server for the passing case
+(run `npm run build` first) and `scripts/test/fake-app.mjs`, a stub with switchable defects, for the
+rest. The fake models port publishing (the app listens on 8080 like the image, so only a `-p` to
+container port 8080 is reachable). The tests cover a conforming server and every check failing on
+its own (status, HTML, CSP, `/trips/x`, missing asset, session state, root, `SIGTERM` exit code and
+speed, each kind of log leak, an empty log), the loopback publish and `stop -t 10` calls, cleanup
+of the container after a failed run, and usage errors. It cannot show that the real image builds or behaves the same; that is what running
 `container-smoke.sh` against a real image is for.
