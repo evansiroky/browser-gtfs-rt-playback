@@ -74,7 +74,8 @@ provider zip into a local filesystem mirror and `terraform init -plugin-dir=<mir
 - [ ] `terraform init -backend=false` (via the local provider mirror) and `terraform validate` pass.
 - [ ] A `terraform plan`-free review shows: max instances 1, min 0, CPU always allocated,
       concurrency 80, 1 vCPU / 2 GiB, `ignore_changes` on the image, public invoker, runtime SA
-      without project roles, three empty secrets, registry cleanup policy, budget thresholds.
+      without project roles, three secrets each holding only a write-only placeholder version,
+      registry cleanup policy, budget thresholds.
 - [ ] No secret value, feed URL, or service-account key resource appears anywhere in `infra/`.
 - [ ] Deploy SA grants are the three scoped roles and nothing broader; its WIF member matches
       the bootstrap naming contract exactly.
