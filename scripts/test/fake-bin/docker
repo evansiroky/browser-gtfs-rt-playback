@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Fake docker for scripts/test/container-smoke-tests.sh. There is no container: `run` starts the
+# built server natively (cwd = $FAKE_DOCKER_SERVER_DIR, which holds server/dist and web/dist, the
+# layout of the image's /app), listening on the host side of -p. It implements only the commands
+# scripts/container-smoke.sh uses; anything else fails loudly (exit 99).
+#
+# State under $FAKE_DOCKER_STATE/<name>: pid, code (written when the process exits), log, env.
+# Knobs (environment): FAKE_DOCKER_UID (answer of `exec id -u`, default 1000),
+# FAKE_DOCKER_LEAK=1 (the log also shows the SCHEDULE_URL), FAKE_DOCKER_STOP_CODE (exit code
+# reported after `stop`), FAKE_DOCKER_WEB_DIST_DIR (overrides WEB_DIST_DIR),
+# FAKE_DOCKER_DIE=1 (the "container" exits 1 at once).
+set -euo pipefail
+
+STATE=${FAKE_DOCKER_STATE:?FAKE_DOCKER_STATE must be set}
+SERVER_DIR=${FAKE_DOCKER_SERVER_DIR:?FAKE_DOCKER_SERVER_DIR must be set}
+
+unsupported() {
+  printf 'fake docker: unsupported command: docker %s\n' "$*" >&2
+  exit 99
+}
+
+cmd=${1:-}
+shift || true
+
+case $cmd in
+  run)
+    name=""
+    port=""
+    envs=()
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        -d) shift ;;
+        --name)
+          name=$2
+          shift 2
+          ;;
+        -p)
+          port=${2%%:*}
+          shift 2
+          ;;
+        -e)
+          envs+=("$2")
+          shift 2
+          ;;
+        -*) unsupported run "$@" ;;
+        *) shift ;; # the image
+      esac
+    done
+    [[ -n $name && -n $port ]] || unsupported run
+    dir=$STATE/$name
+    mkdir -p "$dir"
+    printf '%s\n' ${envs[@]+"${envs[@]}"} >"$dir/env"
+    if [[ ${FAKE_DOCKER_DIE:-0} == 1 ]]; then
+      program=(bash -c 'echo "fatal: cannot start" >&2; exit 1')
+    else
+      program=(node server/dist/main.js)
+    fi
+    web=()
+    if [[ -n ${FAKE_DOCKER_WEB_DIST_DIR:-} ]]; then
+      web=("WEB_DIST_DIR=$FAKE_DOCKER_WEB_DIST_DIR")
+    fi
+    # Detached supervisor: records the pid, and the exit code when the process ends.
+    # shellcheck disable=SC2016  # the supervisor's script is meant to expand in its own shell
+    bash -c '
+      cd "$1"
+      shift
+      dir=$1
+      shift
+      env -i PATH="$PATH" "$@" >"$dir/log" 2>&1 &
+      pid=$!
+      echo "$pid" >"$dir/pid"
+      rc=0
+      wait "$pid" || rc=$?
+      echo "$rc" >"$dir/code"
+    ' _ "$SERVER_DIR" "$dir" "PORT=$port" ${envs[@]+"${envs[@]}"} ${web[@]+"${web[@]}"} "${program[@]}" \
+      </dev/null >/dev/null 2>&1 &
+    for _ in $(seq 100); do
+      [[ -s $dir/pid ]] && break
+      sleep 0.05
+    done
+    echo "fake-container-id-$name"
+    ;;
+  inspect)
+    [[ ${1:-} == --format ]] || unsupported inspect "$@"
+    format=$2
+    dir=$STATE/$3
+    [[ -d $dir ]] || {
+      echo "Error: No such object: $3" >&2
+      exit 1
+    }
+    case $format in
+      '{{.State.Running}}')
+        if [[ -s $dir/code ]]; then echo false; else echo true; fi
+        ;;
+      '{{.State.ExitCode}}')
+        if [[ -n ${FAKE_DOCKER_STOP_CODE:-} && -f $dir/stopped ]]; then
+          echo "$FAKE_DOCKER_STOP_CODE"
+        else
+          cat "$dir/code" 2>/dev/null || echo 0
+        fi
+        ;;
+      *) unsupported inspect "$@" ;;
+    esac
+    ;;
+  exec)
+    [[ ${2:-} == id && ${3:-} == -u ]] || unsupported exec "$@"
+    echo "${FAKE_DOCKER_UID:-1000}"
+    ;;
+  logs)
+    dir=$STATE/$1
+    cat "$dir/log"
+    if [[ ${FAKE_DOCKER_LEAK:-0} == 1 ]]; then
+      grep '^SCHEDULE_URL=' "$dir/env" | sed 's/^SCHEDULE_URL=/fetching /'
+    fi
+    ;;
+  stop)
+    [[ ${1:-} == -t ]] || unsupported stop "$@"
+    grace=$2
+    dir=$STATE/$3
+    touch "$dir/stopped"
+    if [[ ! -s $dir/code ]]; then
+      kill -TERM "$(cat "$dir/pid")" 2>/dev/null || true
+      for _ in $(seq $((grace * 10))); do
+        [[ -s $dir/code ]] && break
+        sleep 0.1
+      done
+      if [[ ! -s $dir/code ]]; then
+        kill -KILL "$(cat "$dir/pid")" 2>/dev/null || true
+        echo 137 >"$dir/code"
+      fi
+    fi
+    echo "$3"
+    ;;
+  rm)
+    [[ ${1:-} == -f ]] || unsupported rm "$@"
+    dir=$STATE/$2
+    if [[ -s $dir/pid && ! -s $dir/code ]]; then
+      kill -KILL "$(cat "$dir/pid")" 2>/dev/null || true
+    fi
+    rm -rf "$dir"
+    ;;
+  *) unsupported "$cmd" "$@" ;;
+esac

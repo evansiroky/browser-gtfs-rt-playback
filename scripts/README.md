@@ -205,8 +205,35 @@ resources, and that no key is ever created.
 
 ```bash
 scripts/test/run-tests.sh
-shellcheck scripts/*.sh scripts/test/*.sh scripts/test/fake-bin/gcloud scripts/test/fake-tf/terraform
+shellcheck scripts/*.sh scripts/test/*.sh scripts/test/fake-bin/gcloud scripts/test/fake-bin/docker \
+  scripts/test/fake-tf/terraform
 ```
 
 If `shellcheck` is not installed: `pip install shellcheck-py`.
 `scripts/.shellcheckrc` lets it follow `source lib.sh`.
+
+## Container smoke test
+
+`container-smoke.sh <image> [--port N]` is a post-build check of the image built from the root
+`Dockerfile` (see the root README). It needs only `docker` and `curl`, and is meant for CI and for
+a local `docker build`; it is independent of the bootstrap scripts. It runs the image with
+placeholder feed URLs on reserved `.invalid` hosts (the server must start and answer anyway) and
+maps host port `N` (default 8080) to the container's 8080. Checks, each reported as `ok`/`FAIL`:
+
+- `GET /` is 200, serves the web app HTML and carries a `Content-Security-Policy` header;
+- `GET /trips/x` returns the same HTML (client-side route fallback);
+- `GET /assets/<missing>` is 404;
+- `POST /api/v1/session/start` returns JSON whose `state` is `active`;
+- the process does not run as root (`docker exec ... id -u`);
+- `docker stop -t 10` (SIGTERM) leaves exit code 0 within 8 s (the server's own drain is 5 s);
+- the container log contains no feed URL, host or key fragment.
+
+The exit status is non-zero if any check fails (2 for a usage error). The container is always
+removed.
+
+`scripts/test/container-smoke-tests.sh` tests the script's own logic against `scripts/test/fake-bin/docker`,
+a fake that runs the built server natively instead of a container (run `npm run build` first). It
+covers a conforming server and each failure the script must catch: running as root, a feed URL in
+the log, a non-zero exit on `SIGTERM`, a missing web app, a container that dies at start, and usage
+errors. It cannot show that the real image builds or behaves the same; that is what running
+`container-smoke.sh` against a real image is for.
