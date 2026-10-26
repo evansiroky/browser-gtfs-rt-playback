@@ -1,5 +1,6 @@
 ---
-status: planned
+status: done
+pr: 3
 depends: [trip-engine]
 specs:
   - specs/api/dashboard.md
@@ -46,27 +47,59 @@ Out: engine logic (done); shapes endpoint (done in [`schedule-loader`](schedule-
 - Confirm data endpoints never reset the inactivity timer and never wake a dormant server.
 
 ## Validation
-- [ ] `npm run lint`, `typecheck`, `test`, `build` pass.
-- [ ] A trip with `frequency_too_dense` (and one with an unreadable frequency row) is served by the
+- [x] `npm run lint`, `typecheck`, `test`, `build` pass.
+- [x] A trip with `frequency_too_dense` (and one with an unreadable frequency row) is served by the
       dashboard items and the detail as specified, over HTTP.
-- [ ] End-to-end API tests over HTTP match the scenario's `expected` for dashboard, all three
+- [x] End-to-end API tests over HTTP match the scenario's `expected` for dashboard, all three
       lists, and detail (classification entries, scheduled block incl. frequencies and active
       instance starts, configuration errors, pings with stable sequence numbers, latest trip update).
-- [ ] `serviceDate` (or any query param) on the detail endpoint → `400 bad_request`; same for
+- [x] `serviceDate` (or any query param) on the detail endpoint → `400 bad_request`; same for
       unknown params on the list; `list` validation.
-- [ ] Dormant → `409 session_not_active`; schedule loading/failed → lists/detail `409
+- [x] Dormant → `409 session_not_active`; schedule loading/failed → lists/detail `409
       schedule_not_ready` while dashboard still `200` with nulls.
-- [ ] Trip IDs with `/`, `%`, spaces, non-ASCII round-trip through the detail route.
-- [ ] 404 for a trip in neither schedule nor retained realtime data; a realtime-only unknown
+- [x] Trip IDs with `/`, `%`, spaces, non-ASCII round-trip through the detail route.
+- [x] 404 for a trip in neither schedule nor retained realtime data; a realtime-only unknown
       trip returns `scheduled: null` with pings.
-- [ ] Reading data endpoints does not reset the inactivity timer (fake-clock test).
+- [x] Reading data endpoints does not reset the inactivity timer (fake-clock test).
 
 ## Risks / unknowns
 - **Payload size** — lists are unpaginated by spec; check a 5k-row list serializes quickly and
   note the byte size in Notes.
 
 ## Notes
-(Populated at closeout.)
+- **Layout.** `server/src/api/dashboard.ts` and `trips.ts` only route, validate and serialize; the
+  engine returns the `shared` types, so handlers are typed `Promise<DashboardResponse>` etc. Both are
+  `ApiRoutes<unknown>` (the engine is `context.trips`, built by `buildApp`) and are mounted in `main.ts`
+  next to the shapes route. `buildApp` creates the `PingStore` right after the `SnapshotStore`, so every
+  ping is indexed; it forgets with the store's clear on dormancy, and is disposed on close. The engine
+  gets `feeds` from the configured URLs and its schedule from the provider.
+- **`ScheduleProvider.store`.** The interface gained `readonly store: ScheduleStore | null` (the loader
+  already had it; the no-op provider has `null`), so `buildApp` can hand the engine the loaded schedule
+  without knowing the loader type. Four test stand-ins got `store = null`.
+- **Order of checks.** Query validation (unknown or repeated parameters, then a missing or unknown `list`)
+  runs before the state guards, as for shapes: a malformed request is `400` whatever the state. The specs
+  do not order the two; no test pins it for the new endpoints.
+- **Data endpoints never wake or touch the timer.** They only use `guard.requireActive` /
+  `requireSchedule`, which read state. The fake-clock test advances to 30 s into a 60 s window, reads
+  four data endpoints, and the server is dormant at 45 s (replacing the reads with a session ping makes it
+  fail); a dormant server stays dormant after reads; a new activation starts pings at sequence 1.
+- **Unreadable frequency row.** The engine nulls each unreadable value, not the whole row (a row with a
+  bad start time keeps its readable end); the HTTP test uses a row with no readable value, which is null
+  throughout either way. The spec's wording ("its unreadable values null") allows both.
+- **Conformance.** `test-support/shape.ts` and `api-shapes.ts` describe each response field for field
+  (exact key sets, nullability, enums; pings are open for pass-through fields) and the HTTP tests check
+  every dashboard, list and detail response they fetch against them, instead of a stored snapshot. The
+  scenario comparison (`expectScenario` in `test-support/expected-rows.ts`) is shared with the engine
+  tests, so the engine and the HTTP API are held to the same `expected`.
+- **Test harness.** `test-support/scenario-app.ts` runs the real app on a `FakeClock` against the fake
+  feeds server: the clock and the feeds start three poll intervals before the scenario instant and move
+  together, so the final responses are at the instant `expected` describes, with three snapshots of pings
+  behind them (expected pings are derived from the published feeds, independent of `PingStore`). The rate
+  limit is raised there (hundreds of requests on a clock that never moves).
+- **Payload size.** 5,000 active trips in one `active-without-realtime` list: 1,115,069 bytes (about
+  223 bytes a row), computed and serialized through the HTTP app in about 50 ms (three runs: 46-56 ms).
+  Fast enough that the unpaginated spec needs no mitigation at that size.
+- **No spec changes.**
 
 ## Follow-ups
-(Populated at closeout.)
+None.
