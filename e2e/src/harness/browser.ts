@@ -20,20 +20,44 @@ export interface AppPage {
 export const DESKTOP = { width: 1280, height: 900 } as const;
 export const PHONE = { width: 390, height: 844 } as const;
 
+/** MapLibre needs WebGL; headless Chromium gets it from the software rasterizer. */
+const WEBGL_ARGS = ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+
 export function launchBrowser(): Promise<Browser> {
-  return chromium.launch();
+  return chromium.launch({ args: WEBGL_ARGS });
 }
+
+/** The origin and style URL the web app's map loads ({@link MAP_STYLE_URL} in the web app). */
+const TILE_ORIGIN = 'https://tiles.openfreemap.org';
+const STYLE_URL = `${TILE_ORIGIN}/styles/liberty`;
+
+/** A style with a plain background: no tiles, sprites or glyphs to fetch, and nothing to wait for. */
+const STUB_STYLE = {
+  version: 8,
+  name: 'e2e',
+  sources: {},
+  layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#dfe7ee' } }],
+};
 
 /**
  * Map tiles, styles, glyphs and sprites live on hosts that are unreachable from the test
- * machine and must not be contacted: answer every request to any host but the app's with an
- * empty success so the page never waits on the network.
+ * machine and must not be contacted: the map style resolves to a tiny local one so the map
+ * really renders, and every other request to any host but the app's gets an empty success so
+ * the page never waits on the network.
  */
 async function stubExternalRequests(context: BrowserContext, origin: string): Promise<void> {
   await context.route(
     (url) => url.origin !== origin,
     (route) => {
       const url = route.request().url();
+      if (url === STYLE_URL) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          headers: { 'access-control-allow-origin': '*' },
+          body: JSON.stringify(STUB_STYLE),
+        });
+      }
       if (url.endsWith('.json')) {
         return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
       }
@@ -51,6 +75,8 @@ export interface OpenOptions {
   fakeClock?: boolean;
   /** Path and query to open. Default `/`. */
   path?: string;
+  /** Runs on the new page before it navigates, to attach listeners that must see every request. */
+  beforeGoto?: (page: Page) => void;
 }
 
 /** A fresh browser context and page on the app, with the external stubs and a request log. */
@@ -71,6 +97,7 @@ export async function openApp(
     }
   });
   if (options.fakeClock) await page.clock.install();
+  options.beforeGoto?.(page);
   await page.goto(new URL(options.path ?? '/', stack.baseUrl).toString());
   return {
     page,
