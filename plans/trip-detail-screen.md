@@ -21,7 +21,11 @@ Out: anything not in the spec (stops, stop times, other layers).
 and the shape fetched **once per page view** (again only if `activatedAt` or `shapeId`
 changes); header with a label per `classification` entry; every column of the trips.txt,
 routes.txt and frequencies.txt rows; nominal-departure note for `exact_times` absent/0; active
-instance starts; prominent configuration-error alert; trip update block; map shown when there is
+instance starts; a template duration that can be null ("cannot be computed", for
+`unusable_stop_times`) and frequency rows whose headway or window is null (shown with their columns
+and a note that they cannot be read); prominent configuration-error alert for all three codes
+(`mixed_exact_times`, `unusable_stop_times`, `frequency_too_dense`: a headway so short that more than
+2,000 instances of a row could run at once); trip update block; map shown when there is
 a shape or a ping with coordinates, shape drawn from the **decoded precision-6 polyline** under
 round markers labeled with the server's `sequence`, fit-to-content that stops refitting once the
 user moves the map, the "no pings / history begins" messages, the "no shape / shape not in
@@ -50,6 +54,8 @@ pans; paused notice, not-found and session banners.
 - [ ] Marker click and row click interactions behave exactly as the Actions section states.
 - [ ] The map does not refit after the user pans/zooms; it does fit on first load to shape + markers.
 - [ ] Shape is requested once per page view (asserted by counting requests across several refreshes).
+- [ ] A frequency trip with `unusable_stop_times` shows no template duration and an error; a row with a
+      null headway or window shows its columns and the note; a `frequency_too_dense` trip shows its error.
 - [ ] All tables show every column from the API response; absent ping fields are omitted; times use the agency timezone.
 - [ ] Screenshots at desktop and phone widths reviewed; no horizontal page scroll.
 

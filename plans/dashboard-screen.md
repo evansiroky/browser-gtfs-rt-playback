@@ -17,7 +17,10 @@ Out: the trip detail screen ([`trip-detail-screen`](trip-detail-screen.md)); pro
 ## Implements
 `specs/screens/dashboard.md`: session banner precedence table, agency block with the agency-local
 clock, schedule statistics, realtime statistics (not-configured / loading placeholders, update
-ages), **schedule configuration errors** notice (expandable trip IDs, hidden when none), the
+ages), **schedule configuration errors** notice (states `configurationErrors.total`, which counts
+errors, so a trip with two codes counts twice; expandable trip IDs with the server's message,
+including for the new code `frequency_too_dense`; hidden when none), "Active trips with realtime
+data" shown as loading while null (no snapshot yet from a configured feed), the
 three lists with their count titles, columns, reason texts, frequency-instance rows ("departs
 every N min"), empty states, row links to `/trips/{tripId}` (no query), per-list text search,
 10-second refresh only while engaged, restart/retry actions.
@@ -42,6 +45,9 @@ every N min"), empty states, row links to `/trips/{tripId}` (no query), per-list
 - [ ] `npm run lint`, `typecheck`, `test`, `build` pass.
 - [ ] `npm run e2e` passes against the fixtures scenario: every statistic equals `expected`.
 - [ ] Each spec statement in "Display Rules" and "Actions" is covered by a component test or an e2e check.
+- [ ] The configuration-error notice states `total` (an error count, not a trip count) and lists
+      items of all three codes with their messages; "Active trips with realtime data" shows the
+      loading placeholder while `activeTripsWithRealtime` is null.
 - [ ] Reasons use the exact texts from the spec table; duplicate trip IDs (frequency instances)
       render as separate rows without key warnings.
 - [ ] While paused (hidden or idle), no network requests are made (asserted in e2e).
