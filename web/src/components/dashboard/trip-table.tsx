@@ -67,7 +67,7 @@ const schedule: Column = {
   render: (item, { timezone }) => {
     const span = formatSpan(item, timezone);
     return (
-      <span className="flex flex-col">
+      <span className="inline-flex flex-col align-top">
         <span className="tabular-nums">{span ?? NONE}</span>
         <FrequencyNote item={item} />
       </span>
@@ -106,7 +106,7 @@ const reason: Column = {
   label: 'Reason',
   width: 'minmax(12rem, 1.6fr)',
   render: (item) => (
-    <span className="flex flex-col">
+    <span className="inline-flex flex-col align-top">
       <ReasonLabel reason={item.reason} />
       <FrequencyNote item={item} />
     </span>
