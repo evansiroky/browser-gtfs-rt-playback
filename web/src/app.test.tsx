@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppRoutes } from '@/app';
+import { createQueryClient } from '@/lib/query-client';
 import { ActivityController } from '@/session/activity-controller';
 import { SessionProvider } from '@/session/session-provider';
 import { FakeClock } from '@/test/fake-clock';
@@ -17,20 +19,31 @@ function renderAt(path: string, status = activeStatus()) {
     },
   });
   return render(
-    <SessionProvider controller={controller}>
-      <MemoryRouter initialEntries={[path]}>
-        <AppRoutes />
-      </MemoryRouter>
-    </SessionProvider>,
+    <QueryClientProvider client={createQueryClient()}>
+      <SessionProvider controller={controller}>
+        <MemoryRouter initialEntries={[path]}>
+          <AppRoutes />
+        </MemoryRouter>
+      </SessionProvider>
+    </QueryClientProvider>,
   );
 }
 
 describe('app shell routes', () => {
-  it('renders the dashboard placeholder at /', async () => {
+  beforeEach(() => {
+    // The dashboard fetches its data; the answer does not matter here.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response('{}', { status: 500 }))),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('renders the dashboard at /', async () => {
     renderAt('/');
     expect(screen.getByRole('link', { name: /GTFS-RT Debugger/ })).toHaveAttribute('href', '/');
     expect(
-      screen.getByText('Dashboard', { selector: '[data-slot=card-title]' }),
+      screen.getByRole('heading', { name: /Active trips with realtime data/ }),
     ).toBeInTheDocument();
     expect(await screen.findByText('Live')).toBeInTheDocument();
   });

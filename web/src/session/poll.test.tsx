@@ -102,6 +102,21 @@ describe('useEngagedQuery', () => {
     expect(queryFn).toHaveBeenCalledTimes(3);
   });
 
+  it('holds polling back while its own condition is false, and starts once it holds', async () => {
+    let enabled = false;
+    const { rerender } = renderHook(() => useEngagedQuery({ queryKey: ['x'], queryFn, enabled }), {
+      wrapper,
+    });
+    await answerSession();
+    await advance(2 * DATA_POLL_INTERVAL_MS);
+    expect(queryFn).not.toHaveBeenCalled();
+
+    enabled = true;
+    rerender();
+    await advance(0);
+    expect(queryFn).toHaveBeenCalledTimes(1);
+  });
+
   it('stops polling when the tab is hidden and keeps the last data', async () => {
     const { result } = render();
     await answerSession();

@@ -33,10 +33,20 @@ export function pollWhileEngaged(session: Pick<ActivitySnapshot, 'phase' | 'stat
   };
 }
 
-/** `useQuery` for data that screens poll only while engaged. */
+/**
+ * `useQuery` for data that screens poll only while engaged. `enabled` adds a further condition
+ * (the schedule being ready, say); it can only hold polling back, never force it.
+ */
 export function useEngagedQuery<TData, TKey extends QueryKey = QueryKey>(
-  options: Pick<UseQueryOptions<TData, Error, TData, TKey>, 'queryKey' | 'queryFn'>,
+  options: Pick<UseQueryOptions<TData, Error, TData, TKey>, 'queryKey' | 'queryFn'> & {
+    enabled?: boolean;
+  },
 ) {
   const session = useSession();
-  return useQuery({ ...options, ...pollWhileEngaged(session) });
+  const polling = pollWhileEngaged(session);
+  return useQuery({
+    ...options,
+    ...polling,
+    enabled: polling.enabled && (options.enabled ?? true),
+  });
 }

@@ -1,5 +1,6 @@
 ---
-status: planned
+status: done
+pr: 3
 depends: [web-shell, trips-api, test-fixtures]
 specs:
   - specs/screens/dashboard.md
@@ -42,16 +43,16 @@ every N min"), empty states, row links to `/trips/{tripId}` (no query), per-list
 - Capture screenshots into the scratchpad for the review report (not committed).
 
 ## Validation
-- [ ] `npm run lint`, `typecheck`, `test`, `build` pass.
-- [ ] `npm run e2e` passes against the fixtures scenario: every statistic equals `expected`.
-- [ ] Each spec statement in "Display Rules" and "Actions" is covered by a component test or an e2e check.
-- [ ] The configuration-error notice states `total` (an error count, not a trip count) and lists
+- [x] `npm run lint`, `typecheck`, `test`, `build` pass.
+- [x] `npm run e2e` passes against the fixtures scenario: every statistic equals `expected`.
+- [x] Each spec statement in "Display Rules" and "Actions" is covered by a component test or an e2e check.
+- [x] The configuration-error notice states `total` (an error count, not a trip count) and lists
       items of all three codes with their messages; "Active trips with realtime data" shows the
       loading placeholder while `activeTripsWithRealtime` is null.
-- [ ] Reasons use the exact texts from the spec table; duplicate trip IDs (frequency instances)
+- [x] Reasons use the exact texts from the spec table; duplicate trip IDs (frequency instances)
       render as separate rows without key warnings.
-- [ ] While paused (hidden or idle), no network requests are made (asserted in e2e).
-- [ ] Screenshots reviewed at desktop and phone widths: no horizontal page scroll; tables degrade
+- [x] While paused (hidden or idle), no network requests are made (asserted in e2e).
+- [x] Screenshots reviewed at desktop and phone widths: no horizontal page scroll; tables degrade
       gracefully (note any visual follow-ups).
 
 ## Risks / unknowns
@@ -59,7 +60,38 @@ every N min"), empty states, row links to `/trips/{tripId}` (no query), per-list
 - **Large lists** — thousands of rows; paginate or virtualize in the UI only if rendering is slow (spec forbids truncating the data).
 
 ## Notes
-(Populated at closeout.)
+- **No spec changes.** The screen was built to `specs/screens/dashboard.md` as written.
+- **Data flow.** `web/src/api/queries.ts` holds `useDashboard` and `useTripList`, both on
+  `useEngagedQuery`, which gained an `enabled` condition (it can hold polling back, never force it).
+  The three lists are fetched only while the session status says `schedule.state = ready`, so after a
+  slow schedule load they appear on the ping that reports it (up to 10 s later), not on the dashboard
+  response alone: the status is the authority and avoids `409 schedule_not_ready`.
+- **Rows** are `<li><a>` grids rather than `<table>` rows so a whole row is one link and phones get
+  stacked label/value pairs instead of horizontal scroll. Row keys are trip ID + scheduled start +
+  reference start time + reason, plus an occurrence counter, so frequency instances never collide.
+- **Not configured vs loading.** A feed counts as unconfigured only when the last status from an
+  *active* server had `null` for it; a dormant status (session ended) carries no feeds, so the page
+  keeps the last active status for that and for the feed ages.
+- **Ages** use the browser clock, like the session banner (`formatAge(ageSeconds(now, t))`).
+- **e2e harness** (`e2e/`, `playwright-core` 1.63.0, pinned to the preinstalled Chromium build, run by
+  Vitest with files in sequence): `startStack()` starts the fixtures' fake feeds in-process and the
+  built server as a child (`EXIT_ON_IDLE=false`, `POLL_INTERVAL_MS=1000`, no rate limit), which also
+  serves `web/dist`. `openApp()` stubs every non-app host (map tiles) and logs the page's requests.
+  Page timers are moved with Playwright's `page.clock` (`runFor`, `fastForward`), never with sleeps.
+  `npm run e2e` builds first, then runs; it is not part of `npm test`. `E2E_PORT_BASE` keeps ports
+  in a range, `E2E_SCREENSHOT_DIR` writes screenshots (nothing is committed).
+- **Minute alignment.** The server judges "active" from its own wall clock to the minute, so the
+  checks against the scenario's `expected` run in a stack started with at least 35 s of the current
+  minute left (`alignToMinute`, at most ~25 s of waiting) and fail with a clear message if the minute
+  changes mid-run. Whole run: about 70 s.
+- **Visual review** (desktop 1280 and phone 390 px): no horizontal scroll (asserted); phone rows stack
+  into label/value pairs. A frequency row's "Frequency / departs every N min" note sits under the
+  start-end, which makes those rows taller than plain ones; acceptable.
+- **Lists of thousands of rows** were not measured; the ages tick once a second and re-render the rows.
+- Unverified: the "Can't reach the server" banner is driven by session requests (as in `web-shell`);
+  a data endpoint failing alone with a 5xx while pings succeed keeps the last data but shows no banner.
 
 ## Follow-ups
-(Populated at closeout.)
+- A data request that fails entirely while the session pings succeed does not raise the "Can't reach
+  the server" banner (it comes from the session controller only). Tracked as: none filed (no issue access).
+- Measure rendering with thousands of rows; paginate or virtualize only if slow. Tracked as: none filed.
