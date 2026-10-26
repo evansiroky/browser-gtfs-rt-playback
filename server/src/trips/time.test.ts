@@ -4,6 +4,7 @@ import {
 } from '@gtfs-rt-debugger/fixtures';
 import { describe, expect, it } from 'vitest';
 import { addDays, agencyDate, isServiceDate, serviceDayStart } from './time.js';
+import { AGENCY_DATES, SERVICE_DAY_STARTS } from './zone-table.js';
 
 const seconds = (iso: string): number => Date.parse(iso) / 1000;
 
@@ -31,7 +32,14 @@ describe('serviceDayStart: local noon minus 12 hours of elapsed time', () => {
     expect(serviceDayStart(date, zone!)).toBe(seconds(iso));
   });
 
-  it('agrees with the fixtures package on every day of 2026 in six zones', () => {
+  it('agrees with the IANA database (Python zoneinfo) around every change of offset in 2026, in 15 zones', () => {
+    expect(SERVICE_DAY_STARTS.length).toBeGreaterThan(100);
+    for (const [zone, date, expected] of SERVICE_DAY_STARTS) {
+      expect(serviceDayStart(date, zone), `${zone} ${date}`).toBe(expected);
+    }
+  });
+
+  it('also agrees with the fixtures package on every day of 2026 in six zones', () => {
     let date = '20260101';
     for (let day = 0; day < 365; day++, date = addDays(date, 1)) {
       for (const zone of [
@@ -69,6 +77,13 @@ describe('agencyDate', () => {
     ['2026-11-02T08:00:00Z', '20261102'],
   ])('%s in Los Angeles is %s', (iso, date) => {
     expect(agencyDate(Date.parse(iso), 'America/Los_Angeles')).toBe(date);
+  });
+
+  it('agrees with the IANA database (Python zoneinfo) at and around every change of offset in 2026', () => {
+    expect(AGENCY_DATES.length).toBeGreaterThan(80);
+    for (const [zone, instant, date] of AGENCY_DATES) {
+      expect(agencyDate(instant * 1000, zone), `${zone} ${instant}`).toBe(date);
+    }
   });
 
   it('is east of UTC in Auckland', () => {
