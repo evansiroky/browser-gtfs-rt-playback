@@ -50,8 +50,9 @@ nothing that exists. It:
 1. Verifies the project exists, billing is linked (and says how to link it if not), and the
    GitHub repository value is a full `owner/repo`.
 2. Enables the APIs Terraform and the pipeline need (Cloud Run, Artifact Registry, Secret
-   Manager, IAM, IAM Credentials, STS, Cloud Resource Manager, Service Usage, Cloud Billing
-   Budget, Cloud Storage). Cloud Build is not used: images are built in CI.
+   Manager, IAM, IAM Credentials, STS, Cloud Resource Manager, Service Usage, Cloud Billing,
+   Cloud Billing Budget, Cloud Storage). Cloud Billing lets Terraform find the project's billing
+   account, so the budget needs no extra input. Cloud Build is not used: images are built in CI.
 3. Creates the versioned Terraform state bucket.
 4. Creates the Workload Identity Federation pool and GitHub OIDC provider, restricted to the
    one GitHub repository, with an attribute that combines the workflow file and the ref so
@@ -59,7 +60,8 @@ nothing that exists. It:
    requests). No service account keys are ever created.
 5. Creates two Terraform identities and binds them: a **plan** identity, read-only apart
    from the state lock — it can read project state and the billing budget, and its only write
-   access in the state bucket is to Terraform lock objects — impersonable only by the
+   access in the state bucket is to Terraform lock objects; it may also use the project's APIs
+   (the service-usage consumer role, needed to plan the budget) — impersonable only by the
    infrastructure workflow on pull requests;
    and an **apply** identity with the roles to manage the resources above, impersonable only
    by the infrastructure workflow on `main`. The apply identity is also given the narrow
