@@ -18,6 +18,8 @@ import { FEED_KINDS, SnapshotStore } from './realtime/snapshot-store.js';
 import { noopScheduleProvider, type ScheduleProvider } from './session/schedule-provider.js';
 import { SessionManager } from './session/session-manager.js';
 import { closeThenExit } from './shutdown.js';
+import { TripEngine } from './trips/engine.js';
+import { PingStore } from './trips/pings.js';
 
 /** Request bodies are tiny (session endpoints take none); a slow body is cut off after this. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -108,10 +110,20 @@ export async function buildApp<S = undefined>(options: AppOptions<S>): Promise<A
     retentionMs: config.retentionMs,
     memoryLimitBytes: config.historyMemoryLimitBytes,
   });
+  // Before the first snapshot, so every ping is indexed; it forgets with the store.
+  const pings = new PingStore(store);
   const deps: ServiceDeps = { config, clock, logger, store };
   const services = (options.services?.(deps) ?? undefined) as S;
   const schedule = (options.schedule ?? (() => noopScheduleProvider))({ ...deps, services });
   const urls = { vehiclePositions: config.vehiclePositionsUrl, tripUpdates: config.tripUpdatesUrl };
+  const feeds = FEED_KINDS.filter((feed) => urls[feed]);
+  const trips = new TripEngine({
+    clock,
+    snapshots: store,
+    pings,
+    schedule: () => schedule.store,
+    feeds,
+  });
   const pollers = FEED_KINDS.flatMap((feed) => {
     const url = urls[feed];
     if (!url) return [];
@@ -145,6 +157,7 @@ export async function buildApp<S = undefined>(options: AppOptions<S>): Promise<A
     store,
     schedule,
     session,
+    trips,
     guard: createDataEndpointGuard(session),
   };
 
@@ -152,7 +165,10 @@ export async function buildApp<S = undefined>(options: AppOptions<S>): Promise<A
     reply.headers(headers);
   });
   app.setErrorHandler(handleApiError);
-  app.addHook('onClose', async () => session.dispose());
+  app.addHook('onClose', async () => {
+    session.dispose();
+    pings.dispose();
+  });
 
   await options.init?.(context);
   await app.register(apiPlugin(context, options.routes ?? []), { prefix: API_PREFIX });
