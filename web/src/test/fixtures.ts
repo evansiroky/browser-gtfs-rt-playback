@@ -1,8 +1,12 @@
 import type {
   DashboardResponse,
   FeedStatus,
+  Ping,
   SessionStatus,
+  TripDetailResponse,
+  TripFrequencyDetail,
   TripListItem,
+  TripScheduleDetail,
 } from '@gtfs-rt-debugger/shared';
 
 export const NOW = 1_800_000_000;
@@ -76,6 +80,96 @@ export function tripItem(overrides: Partial<TripListItem> = {}): TripListItem {
       lastSeenAt: NOW - 12,
     },
     reason: null,
+    ...overrides,
+  };
+}
+
+/** A ping with coordinates and only the always-present fields; override what a test cares about. */
+export function ping(sequence: number, overrides: Partial<Ping> = {}): Ping {
+  return {
+    sequence,
+    receivedAt: NOW - 100 + sequence,
+    timestamp: NOW - 100 + sequence,
+    vehicleId: 'bus-7',
+    vehicleLabel: null,
+    licensePlate: null,
+    latitude: 37.78 + sequence / 1000,
+    longitude: -122.41,
+    bearing: null,
+    odometer: null,
+    speed: null,
+    currentStopSequence: null,
+    stopId: null,
+    currentStatus: null,
+    congestionLevel: null,
+    occupancyStatus: null,
+    occupancyPercentage: null,
+    scheduleRelationship: null,
+    routeId: null,
+    directionId: null,
+    startTime: null,
+    startDate: null,
+    ...overrides,
+  };
+}
+
+export function frequency(overrides: Partial<TripFrequencyDetail> = {}): TripFrequencyDetail {
+  return {
+    row: {
+      trip_id: 'trip-1',
+      start_time: '08:00:00',
+      end_time: '10:00:00',
+      headway_secs: '600',
+      exact_times: '1',
+    },
+    exactTimes: true,
+    headwaySecs: 600,
+    windowStart: NOW - 3600,
+    windowEnd: NOW + 3600,
+    templateDurationSecs: 1200,
+    activeNow: true,
+    activeInstanceStarts: [NOW - 300],
+    ...overrides,
+  };
+}
+
+/** A scheduled plain trip on a route; override what a test cares about. */
+export function scheduled(overrides: Partial<TripScheduleDetail> = {}): TripScheduleDetail {
+  return {
+    trip: {
+      route_id: 'r1',
+      service_id: 'DAILY',
+      trip_id: 'trip-1',
+      trip_headsign: 'Downtown',
+      block_id: '',
+      shape_id: 'shape-1',
+    },
+    route: {
+      route_id: 'r1',
+      route_short_name: '38',
+      route_long_name: 'Geary',
+      route_type: '3',
+    },
+    operatesOnServiceDate: true,
+    start: NOW - 600,
+    end: NOW + 1800,
+    activeNow: true,
+    shapeId: 'shape-1',
+    frequencies: null,
+    configurationErrors: [],
+    ...overrides,
+  };
+}
+
+export function tripDetail(overrides: Partial<TripDetailResponse> = {}): TripDetailResponse {
+  return {
+    tripId: 'trip-1',
+    serviceDate: '20270115',
+    classification: [
+      { list: 'active-with-realtime', reason: null, start: NOW - 600, end: NOW + 1800 },
+    ],
+    scheduled: scheduled(),
+    realtime: { pings: [ping(1), ping(2, { vehicleId: 'bus-8' })], tripUpdate: null },
     ...overrides,
   };
 }

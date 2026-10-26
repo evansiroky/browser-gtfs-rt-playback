@@ -1,5 +1,10 @@
-import type { TripListItem, TripReason } from '@gtfs-rt-debugger/shared';
-import { formatAgencyTime } from './time';
+import type {
+  ListName,
+  TripClassification,
+  TripListItem,
+  TripReason,
+} from '@gtfs-rt-debugger/shared';
+import { formatAgencyTime, type AgencyTimeOptions } from './time';
 
 /** The plain-words reasons of [dashboard](../../../specs/screens/dashboard.md#display-rules). */
 export const REASON_TEXT: Record<TripReason, string> = {
@@ -66,4 +71,51 @@ export function rowKeys(items: readonly TripListItem[]): string[] {
 
 export function tripPath(tripId: string): string {
   return `/trips/${encodeURIComponent(tripId)}`;
+}
+
+/** "2027-01-15" for the API's `YYYYMMDD` service date. */
+export function formatServiceDate(serviceDate: string): string {
+  return /^\d{8}$/.test(serviceDate)
+    ? `${serviceDate.slice(0, 4)}-${serviceDate.slice(4, 6)}-${serviceDate.slice(6)}`
+    : serviceDate;
+}
+
+/**
+ * An instant on the agency clock, or null until the timezone is known (no clock time is guessed)
+ * or when it is unusable.
+ */
+export function agencyTime(
+  epochSeconds: number,
+  timezone: string | null,
+  options?: AgencyTimeOptions,
+): string | null {
+  if (timezone === null) return null;
+  try {
+    return formatAgencyTime(epochSeconds, timezone, options);
+  } catch {
+    return null;
+  }
+}
+
+const LIST_TEXT: Record<ListName, string> = {
+  'active-with-realtime': 'Active now, with realtime data',
+  'active-without-realtime': 'Active now, without realtime data',
+  'unscheduled-with-realtime': 'Not scheduled this minute, with realtime data',
+};
+
+/**
+ * One label per classification entry: which list, the reason for the unscheduled list, and the
+ * entry's span when it has one (it tells frequency instances apart).
+ */
+export function classificationLabel(
+  entry: TripClassification,
+  timezone: string | null,
+): { text: string; detail: string | null } {
+  const start = entry.start === null ? null : agencyTime(entry.start, timezone);
+  const end = entry.end === null ? null : agencyTime(entry.end, timezone);
+  const parts = [
+    entry.reason ? REASON_TEXT[entry.reason] : null,
+    start !== null && end !== null ? `${start}–${end}` : null,
+  ].filter((part): part is string => part !== null);
+  return { text: LIST_TEXT[entry.list], detail: parts.length > 0 ? parts.join(' · ') : null };
 }
