@@ -41,7 +41,9 @@ produces one entry per **instance**, with instance starts *S*, *S* + *H*, *S* + 
 the start is before *E*, for every row, and an instance's span is [start, start + *D*]. The
 row's `exact_times` value is shown to the user as sent but does not change this
 interpretation: headway-based service is treated as if it ran exactly on the headway. An
-instance is identified by its trip ID and start.
+instance is identified by its trip ID and start. A row whose `start_time` or `end_time` is not a
+`HH:MM:SS` time, or whose `headway_secs` is not a positive whole number, cannot be interpreted:
+it produces no instances.
 
 **Configuration errors** — a trip with either of these problems is a **configuration error**
 in the schedule:
@@ -82,7 +84,10 @@ present; otherwise it is inferred: prefer a candidate service date on which the 
 active entry (for a frequency trip whose reference has a `start_time`, an active instance
 starting at exactly that time), then one on which the trip operates, else today. When both
 candidate dates qualify at a step, the later one wins, as for an entry's own service date. Its
-**start** is its `start_time` interpreted on that service date, when present.
+**start** is its `start_time` interpreted on that service date, when present. A `start_date`
+that is not a calendar date written `YYYYMMDD` counts as absent, so the date is inferred; a
+`start_time` that is not a `HH:MM:SS` time is still shown as sent but names no instant, so it
+equals no instance start.
 
 A reference **matches** an entry when it has the same trip ID, the same service date, and:
 
@@ -100,15 +105,17 @@ Lists 1 and 2 hold active entries; list 3 holds references.
 2. **Active without realtime** — active entries that do not.
 3. **Unscheduled with realtime** — realtime trip references that match **no active entry**.
    References are grouped by trip ID, and additionally by start for frequency trips, so each
-   row stands for one trip (or instance) as the feed describes it. Each carries a **reason**,
+   row stands for one trip (or instance) as the feed describes it. When the references of a
+   group name different service dates, the row takes the latest. Each carries a **reason**,
    the first that applies:
    - `unknown_trip` — the trip ID does not exist in `trips.txt`;
-   - `configuration_error` — the trip has the mixed-`exact_times` configuration error;
+   - `configuration_error` — the trip has a configuration error (either code above);
    - `not_in_service` — the trip exists but does not operate on the reference's service date;
    - `missing_start_time` — the trip is a frequency trip and the reference has no
-     `start_time`, so no instance can be identified;
+     `start_time` (absent or empty), so no instance can be identified;
    - `unmatched_start_time` — the trip is a frequency trip and the reference's start equals no
-     instance start of the trip on that service date;
+     instance start of the trip on that service date (including a `start_time` that is not a
+     time);
    - `outside_scheduled_time` — the trip operates that day but the entry matching the
      reference (the plain trip, or the instance whose start the reference names) does not
      overlap the current minute — it is running before its start or after its end.

@@ -47,9 +47,12 @@ trips: [{
 ```
 Rows for different instances of one frequency trip share a `tripId` and differ in
 `scheduledStart`. For a list 3 row of a frequency trip, `frequency` describes the row whose
-window contains the reference's start, else null. A trip with the mixed-`exact_times`
-configuration error produces no active entries; its list 3 rows have `scheduledStart` and
-`scheduledEnd` null and `frequency` null.
+window contains the reference's start, else null. A trip with a configuration error produces no
+active entries; its list 3 rows have `scheduledStart` and `scheduledEnd` null and `frequency`
+null. A list 3 row has `scheduledStart` and `scheduledEnd` only for the reason
+`outside_scheduled_time`, where it is the span of the entry the reference names. When several
+references behind a row carry a `start_time`, `realtime.startTime` is the first, vehicle
+positions before trip updates, in feed order.
 
 ## Detail
 `GET /api/v1/trips/{tripId}` — `tripId` is percent-encoded. **No query parameters are
@@ -84,7 +87,7 @@ scheduled: {                                         // null when the trip ID is
     headwaySecs: integer
     windowStart: epoch seconds
     windowEnd:   epoch seconds
-    templateDurationSecs: integer
+    templateDurationSecs: integer | null            // null when the trip has unusable_stop_times
     activeNow:   boolean
     activeInstanceStarts: epoch seconds[]            // nominal instances overlapping now; empty if misconfigured
   }] | null

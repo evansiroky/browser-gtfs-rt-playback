@@ -24,8 +24,8 @@ lists: {                                            // null until the schedule i
   unscheduledWithRealtime: integer
 } | null
 configurationErrors: {                              // null until the schedule is ready
-  total: integer
-  items: [{ code: "mixed_exact_times" | "unusable_stop_times", tripId: string, message: string }]   // first 100
+  total: integer                                    // number of errors; a trip with both codes counts twice
+  items: [{ code: "mixed_exact_times" | "unusable_stop_times", tripId: string, message: string }]   // first 100, in trips.txt order
 } | null
 ```
 Definitions of each figure are in [trip-activity](../behaviors/trip-activity.md#statistics).
