@@ -113,6 +113,29 @@ describe('SnapshotStore', () => {
     expect(store.retainedBytes()).toBe(0);
   });
 
+  it('counts reserved memory against the limit on every prune, until it is released', () => {
+    const bytes = encodeFeed({ padding: 100 });
+    const { clock, store, add } = setup({ memoryLimitBytes: bytes.byteLength * 3 });
+    let reserved = 0;
+    const release = store.reserveMemory(() => reserved);
+    add('vehiclePositions', bytes);
+    clock.advance(1000);
+    add('vehiclePositions', bytes);
+    clock.advance(1000);
+    add('vehiclePositions', bytes);
+    expect(store.all('vehiclePositions')).toHaveLength(3);
+    // retainedBytes() stays the snapshots' own bytes
+    reserved = bytes.byteLength * 2;
+    store.prune();
+    expect(store.all('vehiclePositions')).toHaveLength(1);
+    expect(store.retainedBytes()).toBe(bytes.byteLength);
+    release();
+    reserved = 1e9;
+    clock.advance(1000);
+    add('vehiclePositions', bytes);
+    expect(store.all('vehiclePositions')).toHaveLength(2);
+  });
+
   it("never evicts a feed's latest snapshot for memory, even when it is the oldest", () => {
     // The smallest limit the configuration allows for 100-byte responses: 2 x 100.
     const { clock, store } = setup({ memoryLimitBytes: 200 });

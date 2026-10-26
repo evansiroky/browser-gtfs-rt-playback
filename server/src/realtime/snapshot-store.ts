@@ -72,7 +72,8 @@ export interface SnapshotStoreOptions {
  *   added and on every {@link prune} (the pollers call it on every tick).
  * - Total retained bytes are bounded by the memory limit; the oldest snapshots across both feeds
  *   are evicted first, but never a feed's latest snapshot. Memory is approximated by the protobuf
- *   byte length of each snapshot (the decoded form is never retained). The configuration
+ *   byte length of each snapshot (the decoded form is never retained) plus whatever
+ *   {@link reserveMemory} holders report. The configuration
  *   guarantees the limit holds one maximum-size snapshot per feed, so sparing the latest ones
  *   never breaks the limit.
  * - {@link clear} (dormancy) forgets everything.
@@ -91,6 +92,7 @@ export class SnapshotStore {
   readonly #snapshotListeners = new Set<SnapshotListener>();
   readonly #evictListeners = new Set<EvictListener>();
   readonly #clearListeners = new Set<ClearListener>();
+  readonly #reservations = new Set<() => number>();
 
   constructor({ clock, logger, retentionMs, memoryLimitBytes }: SnapshotStoreOptions) {
     this.#clock = clock;
@@ -118,7 +120,7 @@ export class SnapshotStore {
       const list = this.#snapshots[feed];
       while (list[0] && list[0].receivedAt < cutoff) this.#evictFirst(feed, 'retention');
     }
-    while (this.#bytes > this.#memoryLimitBytes) {
+    while (this.#bytes + this.#reservedBytes() > this.#memoryLimitBytes) {
       const oldest = this.#oldestFeed({ spareLatest: true });
       if (!oldest) break;
       this.#evictFirst(oldest, 'memory');
@@ -153,6 +155,16 @@ export class SnapshotStore {
     for (const listener of this.#clearListeners) runHook(this.#logger, 'onClear', listener);
   }
 
+  /**
+   * Counts memory that other holders of realtime history (the ping store) keep against the same
+   * limit: `bytes` is read on every {@link prune}, and snapshots are evicted, oldest first, while
+   * snapshots plus reservations exceed the limit. Returns an unregister function.
+   */
+  reserveMemory(bytes: () => number): () => void {
+    this.#reservations.add(bytes);
+    return () => this.#reservations.delete(bytes);
+  }
+
   onSnapshot(listener: SnapshotListener): () => void {
     this.#snapshotListeners.add(listener);
     return () => this.#snapshotListeners.delete(listener);
@@ -166,6 +178,12 @@ export class SnapshotStore {
   onClear(listener: ClearListener): () => void {
     this.#clearListeners.add(listener);
     return () => this.#clearListeners.delete(listener);
+  }
+
+  #reservedBytes(): number {
+    let total = 0;
+    for (const bytes of this.#reservations) total += bytes();
+    return total;
   }
 
   /** The feed holding the oldest snapshot; with `spareLatest`, among feeds with more than one. */
