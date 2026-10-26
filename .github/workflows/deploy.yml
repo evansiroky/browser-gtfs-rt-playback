@@ -48,6 +48,8 @@ jobs:
   ci:
     if: github.event_name == 'push'
     uses: ./.github/workflows/ci.yml
+    with:
+      deploy_gate: true # the deploy job builds and smoke tests its own image; the advisory audit never gates
     permissions:
       contents: read
 
@@ -61,8 +63,9 @@ jobs:
       contents: read
       id-token: write
     # Serialized and never cancelled mid-flight. GitHub keeps one waiting run per group and replaces a
-    # still-waiting older one with a newer one, which is harmless for pushes (the newer commit contains
-    # the older). A rollback that is still waiting when a push arrives is replaced too: re-run it.
+    # still-waiting older one with a newer one of ANY kind. That is harmless between pushes (the newer
+    # commit contains the older), but a waiting rollback replaced by a push is lost (re-run it), and a
+    # waiting push replaced by a rollback is not deployed until the next app push or a manual run.
     concurrency:
       group: deploy
       cancel-in-progress: false
@@ -95,7 +98,7 @@ jobs:
           done
           exit "$missing"
 
-      - uses: actions/checkout@v4 # major-version pin, kept current by .github/dependabot.yml
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -125,12 +128,12 @@ jobs:
             echo "image=$REGION-docker.pkg.dev/$PROJECT/$REPOSITORY/$REPOSITORY:$sha"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: google-github-actions/auth@v2 # major-version pin, kept current by .github/dependabot.yml
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/github
           service_account: deploy@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
 
@@ -160,7 +163,7 @@ jobs:
           err=$(mktemp)
           if gcloud artifacts docker images describe "$IMAGE" > /dev/null 2> "$err"; then
             echo "build=false" >> "$GITHUB_OUTPUT"
-          elif grep -qiE 'not.?found|404' "$err"; then
+          elif grep -qE 'NOT_FOUND|[Ii]mage not found' "$err"; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             cat "$err" >&2
@@ -168,7 +171,7 @@ jobs:
             exit 1
           fi
 
-      # Rebuild from the commit's own tree (a worktree), but run the smoke script from this checkout.
+      # Rebuild from the commit's own tree (a worktree of the full checkout above).
       - name: Check out the commit to build
         if: steps.plan.outputs.build == 'true'
         env:
@@ -180,9 +183,6 @@ jobs:
             exit 1
           fi
 
-      - uses: docker/setup-buildx-action@v3
-        if: steps.plan.outputs.build == 'true'
-
       # The base image the build will resolve, for traceability (a rebuilt older commit may get a newer base).
       - name: Record the base image
         id: base
@@ -192,23 +192,25 @@ jobs:
           digest=$(docker buildx imagetools inspect "$base" | awk '$1 == "Digest:" { print $2; exit }')
           echo "base=$base@$digest" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v6
+      # Plain docker (BuildKit is built into the daemon): no third-party action and no extra builder image
+      # runs in this job, which can mint the deploy token. Cloud Run runs linux/amd64 only.
+      - name: Build the image
         if: steps.plan.outputs.build == 'true'
-        with:
-          context: ${{ runner.temp }}/src
-          platforms: linux/amd64
-          build-args: GIT_SHA=${{ steps.commit.outputs.sha }}
-          tags: ${{ steps.commit.outputs.image }}
-          load: true
-          push: false
-          provenance: false
-          sbom: false
+        env:
+          IMAGE: ${{ steps.commit.outputs.image }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: docker build --platform linux/amd64 --build-arg GIT_SHA="$SHA" -t "$IMAGE" "$RUNNER_TEMP/src"
 
+      # The smoke script of the commit being built, so a check added later cannot fail an older green commit;
+      # a commit that predates the script is checked with the current one.
       - name: Smoke test the image before it is pushed
         if: steps.plan.outputs.build == 'true'
         env:
           IMAGE: ${{ steps.commit.outputs.image }}
-        run: scripts/container-smoke.sh "$IMAGE"
+        run: |
+          smoke="$RUNNER_TEMP/src/scripts/container-smoke.sh"
+          [[ -f $smoke ]] || smoke=scripts/container-smoke.sh
+          bash "$smoke" "$IMAGE"
 
       - name: Push the image
         if: steps.plan.outputs.build == 'true'
