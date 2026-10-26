@@ -800,3 +800,118 @@ describe('realtime trip references', () => {
     });
   });
 });
+
+describe('frequency_too_dense', () => {
+  const dense = (id: string): ScheduleSpec['trips'][number] => ({
+    id,
+    start: '00:00:00',
+    end: '23:59:00',
+    freq: [['00:00:00', '30:00:00', 1, '0']],
+  });
+
+  it('refuses a row of one-second headways over a day-long template instead of enumerating it', async () => {
+    const trips = Array.from({ length: 100 }, (_, i) => dense(`dense-${i}`));
+    const h = await setup({ trips: [...trips, { id: 'ok', start: '12:00:00', end: '13:00:00' }] });
+    const before = process.memoryUsage().heapUsed;
+    const started = performance.now();
+    const dashboard = h.engine.dashboard();
+    const lists = LISTS.map((list) => h.engine.list(list).trips);
+    const detail = h.engine.detail('dense-7')!;
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan(100 * 2 ** 20);
+    expect(dashboard.schedule).toEqual({ tripsToday: 1, tripsActiveNow: 1 });
+    expect(dashboard.configurationErrors?.total).toBe(100);
+    expect(dashboard.configurationErrors?.items[0]).toMatchObject({
+      code: 'frequency_too_dense',
+      tripId: 'dense-0',
+    });
+    expect(lists.map((rows) => rows.length)).toEqual([0, 1, 0]);
+    expect(detail.classification).toEqual([]);
+    expect(detail.scheduled).toMatchObject({
+      start: null,
+      activeNow: false,
+      configurationErrors: [
+        { code: 'frequency_too_dense', message: expect.stringContaining('2,000') },
+      ],
+    });
+    // the row is still shown as in the feed
+    expect(detail.scheduled!.frequencies).toHaveLength(1);
+    expect(detail.scheduled!.frequencies![0]).toMatchObject({ headwaySecs: 1, activeNow: false });
+  });
+
+  it('is a configuration_error in list 3 for a reference to the trip', async () => {
+    const h = await setup({ trips: [dense('d')] });
+    h.push('vehiclePositions', [vehicle('v', { trip: { tripId: 'd', startTime: '12:00:00' } })]);
+    expect(
+      h.engine
+        .list('unscheduled-with-realtime')
+        .trips.map((t) => [t.reason, t.frequency, t.scheduledStart]),
+    ).toEqual([['configuration_error', null, null]]);
+  });
+
+  it('lists a row at the limit: 2 000 instances running at once', async () => {
+    // D = 119 940 s, H = 60 s: ceil((D + 60) / H) = 2 000, and all 2 000 are running at 12:07
+    const spec: ScheduleSpec = {
+      trips: [
+        {
+          id: 'busy',
+          start: '00:00:00',
+          end: '33:19:00',
+          freq: [['00:00:00', '48:00:00', 60, '0']],
+        },
+      ],
+    };
+    const h = await setup(spec);
+    const { dashboard, rows } = {
+      dashboard: h.engine.dashboard(),
+      rows: h.engine.list('active-without-realtime').trips,
+    };
+    expect(dashboard.configurationErrors?.total).toBe(0);
+    // running at 12:07: starts from 02:48 yesterday to 12:07 today, one a minute: 1 272 + 728. The
+    // instances of yesterday's window from 24:00:00 are the instants of today's own, counted once.
+    expect(rows.length).toBe(2000);
+    expect(dashboard.schedule?.tripsActiveNow).toBe(rows.length);
+    expect(dashboard.lists?.activeWithoutRealtime).toBe(rows.length);
+    expect(new Set(rows.map((r) => r.scheduledStart)).size).toBe(rows.length);
+  });
+
+  it('counts a trip with a hundred thousand scheduled entries a day without enumerating them', async () => {
+    const h = await setup({
+      trips: [
+        {
+          id: 'many',
+          start: '00:00:00',
+          end: '00:01:00',
+          freq: [['00:00:00', '30:00:00', 1, '0']],
+        },
+      ],
+    });
+    expect(h.engine.dashboard().schedule).toEqual({ tripsToday: 108_000, tripsActiveNow: 120 });
+  });
+});
+
+describe('references in the hundred thousands', () => {
+  it('does not fail on 130 000 references to one trip', async () => {
+    const h = await setup({ trips: [{ id: 'busy', start: '12:00:00', end: '13:00:00' }] });
+    const entities = Array.from({ length: 130_000 }, (_, i) =>
+      vehicle(`e${i}`, {
+        trip: { tripId: 'busy' },
+        vehicle: { id: `bus-${i}` },
+        timestamp: 1_700_000_000 + i,
+      }),
+    );
+    h.push('vehiclePositions', entities);
+    h.push(
+      'tripUpdates',
+      entities.slice(0, 130_000).map((e) => update(e.id!, { trip: { tripId: 'busy' } })),
+    );
+    expect(h.engine.dashboard().realtime).toMatchObject({
+      vehicles: 130_000,
+      activeTripsWithRealtime: 1,
+    });
+    const [row] = h.engine.list('active-with-realtime').trips;
+    expect(row!.realtime!.vehicleIds).toHaveLength(130_000);
+    expect(row!.realtime!.lastSeenAt).toBe(1_700_000_000 + 129_999);
+    expect(h.engine.detail('busy')!.realtime.pings).toHaveLength(130_000);
+  }, 60_000);
+});

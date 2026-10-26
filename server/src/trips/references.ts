@@ -89,7 +89,8 @@ export function readReferences(snapshot: Snapshot, message: FeedMessage): FeedRe
       source: snapshot.feed,
       tripId,
       vehicleId: text(vehicle.vehicle?.id),
-      timestamp: optionalNumber(position, 'timestamp'),
+      // a timestamp of 0 is no timestamp
+      timestamp: optionalNumber(position, 'timestamp') || null,
       feedTimestamp,
       routeId: text(trip?.routeId),
       startTime,

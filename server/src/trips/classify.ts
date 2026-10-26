@@ -2,7 +2,7 @@ import type { TripListItem, TripReason } from '@gtfs-rt-debugger/shared';
 import type { ScheduleTrip } from '../schedule/store.js';
 import {
   entryOn,
-  parseFrequencyRows,
+  readableWindows,
   tripOf,
   type Entry,
   type FrequencyWindow,
@@ -65,14 +65,17 @@ function byStart(a: number | null, b: number | null): number {
   return a - b;
 }
 
+/** Where the active entries of a trip come from. */
+export type EntriesOf = (tripId: string) => readonly Entry[];
+
 /** Gives each reference its service date and start (trip-activity.md "Realtime trip references"). */
 export function resolveReferences(
   frame: Frame,
-  active: ReadonlyMap<string, readonly Entry[]>,
+  entriesOf: EntriesOf,
   references: readonly TripReference[],
 ): ResolvedReference[] {
   return references.map((reference) => {
-    const date = reference.startDate ?? inferDate(frame, active, reference);
+    const date = reference.startDate ?? inferDate(frame, entriesOf, reference);
     return {
       ...reference,
       date,
@@ -84,11 +87,11 @@ export function resolveReferences(
 /** The service date of a reference with no `start_date`; the later candidate wins each step. */
 export function inferDate(
   frame: Frame,
-  active: ReadonlyMap<string, readonly Entry[]>,
+  entriesOf: EntriesOf,
   reference: Pick<TripReference, 'tripId' | 'startTime' | 'startOffset'>,
 ): string {
   const later = [...frame.candidates].reverse();
-  const entries = active.get(reference.tripId) ?? [];
+  const entries = entriesOf(reference.tripId);
   for (const date of later) {
     const has = entries.some(
       (entry) =>
@@ -122,9 +125,40 @@ export function groupByTrip<T extends { tripId: string }>(items: readonly T[]): 
   return groups;
 }
 
+interface Matching {
+  /** The active entries that have references, with the references. */
+  readonly matched: ReadonlyMap<Entry, readonly ResolvedReference[]>;
+  readonly unmatched: readonly ResolvedReference[];
+}
+
+/** Matches each reference with the active entries it names (trip-activity.md "Realtime trip references"). */
+function match(frame: Frame, entriesOf: EntriesOf, references: readonly TripReference[]): Matching {
+  const resolved = resolveReferences(frame, entriesOf, references);
+  const matched = new Map<Entry, ResolvedReference[]>();
+  const unmatched: ResolvedReference[] = [];
+  for (const reference of resolved) {
+    let hit = false;
+    for (const entry of entriesOf(reference.tripId)) {
+      if (!matches(entry, reference)) continue;
+      hit = true;
+      const list = matched.get(entry);
+      if (list) list.push(reference);
+      else matched.set(entry, [reference]);
+    }
+    if (!hit) unmatched.push(reference);
+  }
+  return { matched, unmatched };
+}
+
+/** The key of the list 3 row an unmatched reference belongs to: its trip, and its start if a frequency trip. */
+function rowKey(frame: Frame, reference: ResolvedReference): string {
+  const frequency = frame.tripFacts(reference.tripId)?.frequency ?? false;
+  return `${reference.tripId}\0${frequency ? (reference.start ?? `raw:${reference.startTime}`) : ''}`;
+}
+
 /**
  * Splits the active entries and the references into the three lists (trip-activity.md "The
- * three lists"), in list order.
+ * three lists"), in list order. `entries` are all the active entries.
  */
 export function classify(
   frame: Frame,
@@ -132,27 +166,10 @@ export function classify(
   references: readonly TripReference[],
 ): Classification {
   const byTrip = groupByTrip(entries);
-  const resolved = resolveReferences(frame, byTrip, references);
-  const matched = new Map<Entry, ResolvedReference[]>();
-  const unmatched: ResolvedReference[] = [];
-  const referencesByTrip = groupByTrip(resolved);
-  for (const [tripId, group] of referencesByTrip) {
-    const tripEntries = byTrip.get(tripId) ?? [];
-    for (const reference of group) {
-      const hits = tripEntries.filter((entry) => matches(entry, reference));
-      for (const entry of hits) {
-        const list = matched.get(entry);
-        if (list) list.push(reference);
-        else matched.set(entry, [reference]);
-      }
-      if (hits.length === 0) unmatched.push(reference);
-    }
-  }
-
+  const { matched, unmatched } = match(frame, (tripId) => byTrip.get(tripId) ?? [], references);
   const rows = entries
     .map((entry): ActiveRow => ({ entry, references: matched.get(entry) ?? [] }))
     .sort((a, b) => a.entry.start - b.entry.start || byCode(a.entry.tripId, b.entry.tripId));
-
   return {
     withRealtime: rows.filter((row) => row.references.length > 0),
     withoutRealtime: rows.filter((row) => row.references.length === 0),
@@ -160,28 +177,48 @@ export function classify(
   };
 }
 
+/**
+ * The sizes of the three lists, without building the active entries: `activeCount` is the number
+ * of active entries, and only the entries of the referenced trips are made.
+ */
+export function classifyCounts(
+  frame: Frame,
+  activeCount: number,
+  references: readonly TripReference[],
+): { withRealtime: number; withoutRealtime: number; unscheduled: number } {
+  const { matched, unmatched } = match(frame, (tripId) => frame.tripEntries(tripId), references);
+  const rows = new Set<string>();
+  for (const reference of unmatched) rows.add(rowKey(frame, reference));
+  return {
+    withRealtime: matched.size,
+    withoutRealtime: activeCount - matched.size,
+    unscheduled: rows.size,
+  };
+}
+
 /** Groups the unmatched references by trip, and by start for frequency trips, and gives reasons. */
 function unscheduledRows(frame: Frame, unmatched: readonly ResolvedReference[]): UnscheduledRow[] {
   const groups = new Map<string, ResolvedReference[]>();
   for (const reference of unmatched) {
-    const frequency = frame.tripFacts(reference.tripId)?.frequency ?? false;
-    const start = frequency ? (reference.start ?? `raw:${reference.startTime}`) : '';
-    const key = JSON.stringify([reference.tripId, start]);
+    const key = rowKey(frame, reference);
     const group = groups.get(key);
     if (group) group.push(reference);
     else groups.set(key, [reference]);
   }
-  const rows = [...groups.values()].map((group) => unscheduledRow(frame, group));
+  const rows: UnscheduledRow[] = [];
+  for (const group of groups.values()) rows.push(unscheduledRow(frame, group));
+  const rank = new Map(REASONS.map((reason, i) => [reason, i]));
   return rows.sort(
     (a, b) =>
-      REASONS.indexOf(a.reason) - REASONS.indexOf(b.reason) ||
+      rank.get(a.reason)! - rank.get(b.reason)! ||
       byCode(a.tripId, b.tripId) ||
       byStart(a.start, b.start),
   );
 }
 
 function unscheduledRow(frame: Frame, group: readonly ResolvedReference[]): UnscheduledRow {
-  const latest = group.reduce((best, next) => (next.date > best.date ? next : best));
+  let latest = group[0]!;
+  for (const reference of group) if (reference.date > latest.date) latest = reference;
   const { tripId, date } = latest;
   const base = { tripId, date, references: group, start: latest.start };
   const trip = tripOf(frame.store, tripId);
@@ -214,7 +251,7 @@ function windowAt(trip: ScheduleTrip, reference: ResolvedReference): FrequencyWi
   const offset = reference.startOffset;
   if (offset === null) return null;
   return (
-    parseFrequencyRows(trip.frequencies).find(
+    readableWindows(trip.frequencies).find(
       (window) => window.startSecs <= offset && offset < window.endSecs,
     ) ?? null
   );
@@ -226,16 +263,28 @@ type Realtime = NonNullable<TripListItem['realtime']>;
 
 /** What the references behind a row say (api/trips.md `realtime`). */
 export function realtimeOf(references: readonly ResolvedReference[]): Realtime {
-  const timestamps = references.flatMap((r) => (r.timestamp === null ? [] : [r.timestamp]));
-  const feedTimestamp = references.find((r) => r.feedTimestamp !== null)?.feedTimestamp ?? null;
+  const vehicleIds = new Set<string>();
+  let newest: number | null = null;
+  let feedTimestamp: number | null = null;
+  let startTime: string | null = null;
+  let hasVehiclePosition = false;
+  let hasTripUpdate = false;
+  for (const reference of references) {
+    if (reference.vehicleId !== null) vehicleIds.add(reference.vehicleId);
+    if (reference.timestamp !== null && (newest === null || reference.timestamp > newest)) {
+      newest = reference.timestamp;
+    }
+    feedTimestamp ??= reference.feedTimestamp;
+    startTime ??= reference.startTime;
+    if (reference.source === 'vehiclePositions') hasVehiclePosition = true;
+    else hasTripUpdate = true;
+  }
   return {
-    vehicleIds: [
-      ...new Set(references.flatMap((r) => (r.vehicleId === null ? [] : [r.vehicleId]))),
-    ],
-    hasVehiclePosition: references.some((r) => r.source === 'vehiclePositions'),
-    hasTripUpdate: references.some((r) => r.source === 'tripUpdates'),
-    startTime: references.find((r) => r.startTime !== null)?.startTime ?? null,
-    lastSeenAt: timestamps.length > 0 ? Math.max(...timestamps) : feedTimestamp,
+    vehicleIds: [...vehicleIds],
+    hasVehiclePosition,
+    hasTripUpdate,
+    startTime,
+    lastSeenAt: newest ?? feedTimestamp,
   };
 }
 
@@ -250,6 +299,11 @@ function frequencyOf(window: FrequencyWindow | null, dayStart: number): TripList
     : null;
 }
 
+function firstRouteId(references: readonly ResolvedReference[]): string | null {
+  for (const reference of references) if (reference.routeId !== null) return reference.routeId;
+  return null;
+}
+
 /** Route and headsign fields (api/trips.md); an empty cell is no value. */
 function tripFields(
   frame: Frame,
@@ -257,7 +311,7 @@ function tripFields(
   referenceRouteId: string | null,
 ): Pick<TripListItem, 'routeId' | 'routeShortName' | 'routeLongName' | 'headsign'> {
   const row = frame.store.trip(tripId);
-  const routeId = row ? row['route_id'] || null : referenceRouteId;
+  const routeId = row?.['route_id'] || referenceRouteId;
   const route = routeId ? frame.store.route(routeId) : undefined;
   return {
     routeId,
@@ -272,7 +326,7 @@ export function activeItem(frame: Frame, row: ActiveRow): TripListItem {
   return {
     tripId: entry.tripId,
     serviceDate: entry.date,
-    ...tripFields(frame, entry.tripId, null),
+    ...tripFields(frame, entry.tripId, firstRouteId(row.references)),
     scheduledStart: entry.start,
     scheduledEnd: entry.end,
     frequency: frequencyOf(entry.window, entry.dayStart),
@@ -285,11 +339,7 @@ export function unscheduledItem(frame: Frame, row: UnscheduledRow): TripListItem
   return {
     tripId: row.tripId,
     serviceDate: row.date,
-    ...tripFields(
-      frame,
-      row.tripId,
-      row.references.find((r) => r.routeId !== null)?.routeId ?? null,
-    ),
+    ...tripFields(frame, row.tripId, firstRouteId(row.references)),
     scheduledStart: row.named?.start ?? null,
     scheduledEnd: row.named?.end ?? null,
     frequency: frequencyOf(row.window, frame.dayStart(row.date)),

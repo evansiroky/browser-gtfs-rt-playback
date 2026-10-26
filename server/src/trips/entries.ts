@@ -1,48 +1,62 @@
 import type { ConfigurationErrorCode } from '@gtfs-rt-debugger/shared';
-import { parseGtfsTime } from '../schedule/time.js';
+import { readFrequencyRow } from '../schedule/frequency.js';
 import type { Row, ScheduleStore, ScheduleTrip } from '../schedule/store.js';
 import { addDays, agencyDate, serviceDayStart } from './time.js';
 
-/**
- * One interpretable `frequencies.txt` row of a trip (trip-activity.md "Schedule entries"): the
- * nominal instances start at `startSecs`, `startSecs + headwaySecs`, ... while before `endSecs`.
- */
-export interface FrequencyWindow {
+/** What a `frequencies.txt` row says; the values are null where the row cannot be read. */
+export interface FrequencyRowInfo {
   /** Position of the row among the trip's `frequencies.txt` rows. */
   readonly rowIndex: number;
   readonly row: Row;
   /** Seconds from the service day start. */
-  readonly startSecs: number;
-  readonly endSecs: number;
-  readonly headwaySecs: number;
+  readonly startSecs: number | null;
+  readonly endSecs: number | null;
+  readonly headwaySecs: number | null;
   /** As sent (absent = false); informational only. */
   readonly exactTimes: boolean;
-  /** The number of instances. */
+  /** The number of nominal instances: 0 for a row that cannot be read or has an empty window. */
   readonly count: number;
 }
 
-/** The rows that can be interpreted; the others produce no instances. */
-export function parseFrequencyRows(rows: readonly Row[]): FrequencyWindow[] {
-  const windows: FrequencyWindow[] = [];
-  rows.forEach((row, rowIndex) => {
-    const startSecs = parseGtfsTime(row['start_time']);
-    const endSecs = parseGtfsTime(row['end_time']);
-    const headway = /^\s*\d+\s*$/.test(row['headway_secs'] ?? '') ? Number(row['headway_secs']) : 0;
-    if (startSecs === null || endSecs === null || headway <= 0) return;
-    windows.push({
+/**
+ * A readable row (trip-activity.md "Schedule entries"): instances start at `startSecs`,
+ * `startSecs + headwaySecs`, ... while before `endSecs`.
+ */
+export interface FrequencyWindow extends FrequencyRowInfo {
+  readonly startSecs: number;
+  readonly endSecs: number;
+  readonly headwaySecs: number;
+}
+
+/** Every row of a trip, readable or not, in file order. */
+export function parseFrequencyRows(rows: readonly Row[]): FrequencyRowInfo[] {
+  return rows.map((row, rowIndex) => {
+    const { startSecs, endSecs, headwaySecs } = readFrequencyRow(row);
+    const readable = startSecs !== null && endSecs !== null && headwaySecs !== null;
+    return {
       rowIndex,
       row,
       startSecs,
       endSecs,
-      headwaySecs: headway,
+      headwaySecs,
       exactTimes: row['exact_times']?.trim() === '1',
-      count: endSecs > startSecs ? Math.ceil((endSecs - startSecs) / headway) : 0,
-    });
+      count: readable && endSecs > startSecs ? Math.ceil((endSecs - startSecs) / headwaySecs) : 0,
+    };
   });
-  return windows;
 }
 
-/** A schedule entry (trip-activity.md): a plain trip, or one nominal instance of a frequency row. */
+/** The rows that can be read. */
+export function readableWindows(rows: readonly Row[]): FrequencyWindow[] {
+  return parseFrequencyRows(rows).filter(
+    (info): info is FrequencyWindow =>
+      info.startSecs !== null && info.endSecs !== null && info.headwaySecs !== null,
+  );
+}
+
+/**
+ * A schedule entry (trip-activity.md): a plain trip, or one nominal instance of a frequency row.
+ * A plain trip is identified by its trip ID, an instance by its trip ID and start instant.
+ */
 export interface Entry {
   readonly tripId: string;
   /** The service date the entry is on. */
@@ -71,7 +85,16 @@ interface Item {
   /** Lowest and highest second any instance of the item touches. */
   readonly lo: number;
   readonly hi: number;
+  /**
+   * Whether the entries of the trip can repeat: rows with overlapping windows, or instances far
+   * enough apart that one date's start instants can be another's. Such trips are enumerated
+   * and de-duplicated; the others are counted by arithmetic.
+   */
+  readonly exact: boolean;
 }
+
+/** A day is at least this many seconds (a day with a one-hour change has 23 hours). */
+const SHORTEST_DAY_SECS = 82_800;
 
 /** The items of a trip that has no configuration error. */
 function itemsOf(trip: ScheduleTrip): Item[] {
@@ -86,39 +109,57 @@ function itemsOf(trip: ScheduleTrip): Item[] {
         durationSecs: duration,
         lo: Math.min(template.startSecs, template.endSecs),
         hi: Math.max(template.startSecs, template.endSecs),
+        exact: false,
       },
     ];
   }
-  return parseFrequencyRows(trip.frequencies)
-    .filter((window) => window.count > 0)
-    .map((window) => {
-      const lastStart = window.startSecs + (window.count - 1) * window.headwaySecs;
-      return {
-        trip,
-        window,
-        durationSecs: duration,
-        lo: Math.min(window.startSecs, window.startSecs + duration),
-        hi: Math.max(lastStart, lastStart + duration),
-      };
-    });
+  const windows = readableWindows(trip.frequencies).filter((window) => window.count > 0);
+  const exact = repeats(windows);
+  return windows.map((window) => {
+    const lastStart = window.startSecs + (window.count - 1) * window.headwaySecs;
+    return {
+      trip,
+      window,
+      durationSecs: duration,
+      lo: Math.min(window.startSecs, window.startSecs + duration),
+      hi: Math.max(lastStart, lastStart + duration),
+      exact,
+    };
+  });
 }
 
-/** Offsets (seconds from the day start) of the instances of an item overlapping `[a, a + 59]`. */
-function activeOffsets(item: Item, a: number): Span[] {
+/** Whether the instants of these windows can repeat (see {@link Item.exact}). */
+function repeats(windows: readonly FrequencyWindow[]): boolean {
+  if (windows.length === 0) return false;
+  const byStart = [...windows].sort((a, b) => a.startSecs - b.startSecs);
+  let furthest = -Infinity;
+  let first = Infinity;
+  let last = -Infinity;
+  for (const window of byStart) {
+    if (window.startSecs < furthest) return true;
+    furthest = Math.max(furthest, window.endSecs);
+    first = Math.min(first, window.startSecs);
+    last = Math.max(last, window.startSecs + (window.count - 1) * window.headwaySecs);
+  }
+  return last - first >= SHORTEST_DAY_SECS;
+}
+
+/** The start offsets of the active instances of an item, `a` seconds into the service day. */
+function activeRange(item: Item, a: number): { first: number; last: number } | null {
   if (!item.window) {
-    const startSecs = item.trip.template!.startSecs;
-    const endSecs = item.trip.template!.endSecs;
-    return startSecs <= a + 59 && endSecs >= a ? [{ startSecs, endSecs }] : [];
+    const { startSecs, endSecs } = item.trip.template!;
+    return startSecs <= a + 59 && endSecs >= a ? { first: 0, last: 0 } : null;
   }
   const { startSecs, headwaySecs, count } = item.window;
   const first = Math.max(0, Math.ceil((a - item.durationSecs - startSecs) / headwaySecs));
   const last = Math.min(count - 1, Math.floor((a + 59 - startSecs) / headwaySecs));
-  const spans: Span[] = [];
-  for (let k = first; k <= last; k++) {
-    const start = startSecs + k * headwaySecs;
-    spans.push({ startSecs: start, endSecs: start + item.durationSecs });
-  }
-  return spans;
+  return first <= last ? { first, last } : null;
+}
+
+function spanOf(item: Item, k: number): Span {
+  if (!item.window) return item.trip.template!;
+  const startSecs = item.window.startSecs + k * item.window.headwaySecs;
+  return { startSecs, endSecs: startSecs + item.durationSecs };
 }
 
 const BLOCK = 128;
@@ -126,7 +167,7 @@ const BLOCK = 128;
 const indexes = new WeakMap<ScheduleStore, ScheduleIndex>();
 
 /**
- * What can be known about the schedule without a clock: the entries by start second, the
+ * What can be known about the schedule without a clock: the items ordered by start second, the
  * entries produced per service, the configuration errors per trip. It is a pure function of the
  * immutable store and lives only as long as the store does (the loader drops both at dormancy);
  * which entries are scheduled or active, and on which date, is always computed from the clock.
@@ -136,6 +177,8 @@ export class ScheduleIndex {
   readonly errors = new Map<string, ConfigurationErrorCode[]>();
   /** Entries produced by one service day, per service ID. */
   readonly entriesPerService = new Map<string, number>();
+  /** The trips whose entries can repeat, counted by enumeration. */
+  readonly exactTrips: ScheduleTrip[] = [];
   readonly #items: Item[] = [];
   /** The highest `hi` of each block of {@link BLOCK} items, so a query skips finished blocks. */
   readonly #blockHi: Float64Array;
@@ -157,16 +200,16 @@ export class ScheduleIndex {
     }
     for (const trip of store.trips()) {
       if (this.errors.has(trip.id)) continue;
-      for (const item of itemsOf(trip)) {
-        this.#items.push(item);
-        const serviceId = trip.row['service_id'];
-        if (serviceId) {
-          this.entriesPerService.set(
-            serviceId,
-            (this.entriesPerService.get(serviceId) ?? 0) + (item.window?.count ?? 1),
-          );
-        }
-      }
+      const items = itemsOf(trip);
+      if (items.length === 0) continue;
+      for (const item of items) this.#items.push(item);
+      const serviceId = trip.row['service_id'];
+      if (!serviceId) continue;
+      if (items[0]!.exact) this.exactTrips.push(trip);
+      this.entriesPerService.set(
+        serviceId,
+        (this.entriesPerService.get(serviceId) ?? 0) + entriesPerDay(items),
+      );
     }
     this.#items.sort((a, b) => a.lo - b.lo);
     this.#blockHi = new Float64Array(Math.ceil(this.#items.length / BLOCK)).fill(-Infinity);
@@ -176,8 +219,8 @@ export class ScheduleIndex {
     });
   }
 
-  /** The active instances at `a` seconds into a service day, for every item of every service. */
-  *active(a: number): Generator<{ item: Item; span: Span }> {
+  /** The items with an active instance `a` seconds into a service day, and which instances. */
+  *active(a: number): Generator<{ item: Item; first: number; last: number }> {
     let low = 0;
     for (let high = this.#items.length; low < high;) {
       const middle = (low + high) >> 1;
@@ -192,9 +235,32 @@ export class ScheduleIndex {
       }
       const item = this.#items[i]!;
       if (item.hi < a) continue;
-      for (const span of activeOffsets(item, a)) yield { item, span };
+      const range = activeRange(item, a);
+      if (range) yield { item, ...range };
     }
   }
+}
+
+/** The entries one service day produces for a trip: instances at one instant count once. */
+function entriesPerDay(items: readonly Item[]): number {
+  if (items[0]!.window === null) return 1;
+  let total = 0;
+  for (const item of items) total += item.window!.count;
+  const windows = items.map((item) => item.window!);
+  // Only rows whose windows overlap can produce an instant twice.
+  const byStart = [...windows].sort((a, b) => a.startSecs - b.startSecs);
+  let furthest = -Infinity;
+  let overlapping = false;
+  for (const window of byStart) {
+    if (window.startSecs < furthest) overlapping = true;
+    furthest = Math.max(furthest, window.endSecs);
+  }
+  if (!overlapping) return total;
+  const starts = new Set<number>();
+  for (const window of windows) {
+    for (let k = 0; k < window.count; k++) starts.add(window.startSecs + k * window.headwaySecs);
+  }
+  return starts.size;
 }
 
 /** The clock of one computation: the candidate service dates and the current minute. */
@@ -209,6 +275,7 @@ export class Frame {
   readonly #dayStarts = new Map<string, number>();
   readonly #operates = new Map<string, boolean>();
   readonly #trips = new Map<string, { serviceId: string | undefined; frequency: boolean } | null>();
+  readonly #tripEntries = new Map<string, readonly Entry[]>();
 
   constructor(
     readonly store: ScheduleStore,
@@ -267,43 +334,98 @@ export class Frame {
       dayStart,
     };
   }
+
+  /** The active entries of one trip, memoized for this computation. */
+  tripEntries(tripId: string): readonly Entry[] {
+    let entries = this.#tripEntries.get(tripId);
+    if (!entries) {
+      const trip = tripOf(this.store, tripId);
+      entries =
+        !trip || this.index.errors.has(tripId) ? [] : collect(this, itemsOf(trip), trip.row);
+      this.#tripEntries.set(tripId, entries);
+    }
+    return entries;
+  }
 }
 
 /** Seconds into the service day of `date` at which the current minute starts. */
 const secondsIn = (frame: Frame, date: string): number => frame.minute - frame.dayStart(date);
 
 /**
- * The active entries of the candidate service dates (trip-activity.md "Counts"): entries on a
- * date their trip operates, overlapping the current minute. An entry active on both dates is
- * on the later one.
+ * The active entries of the items of one trip. A plain trip is one entry, on the later date it is
+ * active; an instance is identified by its start instant, so one produced twice is one entry, on
+ * the later date, described by the first row.
  */
-export function activeEntries(frame: Frame): Entry[] {
+function collect(frame: Frame, items: readonly Item[], row: Row): Entry[] {
   const entries = new Map<string, Entry>();
   for (const date of frame.candidates) {
-    for (const { item, span } of frame.index.active(secondsIn(frame, date))) {
-      if (!frame.operates(item.trip.row['service_id'], date)) continue;
-      const key = `${item.trip.id}\0${item.window?.rowIndex ?? -1}\0${span.startSecs}`;
-      entries.set(key, frame.entry(item.trip.id, date, span, item.window));
+    if (!frame.operates(row['service_id'], date)) continue;
+    const a = secondsIn(frame, date);
+    for (const item of items) {
+      const range = activeRange(item, a);
+      if (range) addInstances(frame, entries, item, date, range);
     }
   }
   return [...entries.values()];
 }
 
-/** The active entries of one trip, as {@link activeEntries} would hold them. */
-export function activeEntriesOf(frame: Frame, tripId: string): Entry[] {
-  const trip = tripOf(frame.store, tripId);
-  if (!trip || frame.index.errors.has(tripId)) return [];
+function addInstances(
+  frame: Frame,
+  entries: Map<string, Entry>,
+  item: Item,
+  date: string,
+  { first, last }: { first: number; last: number },
+): void {
+  for (let k = first; k <= last; k++) {
+    const entry = frame.entry(item.trip.id, date, spanOf(item, k), item.window);
+    const key = item.window ? `${item.trip.id}\0${entry.start}` : item.trip.id;
+    const previous = entries.get(key);
+    // On one date the first row in the file describes an instant; a later date replaces an earlier.
+    if (
+      previous?.window &&
+      item.window &&
+      previous.date === date &&
+      previous.window.rowIndex <= item.window.rowIndex
+    ) {
+      continue;
+    }
+    entries.set(key, entry);
+  }
+}
+
+/** Every active entry of the candidate service dates (trip-activity.md "Counts"). */
+export function activeEntries(frame: Frame): Entry[] {
   const entries = new Map<string, Entry>();
   for (const date of frame.candidates) {
-    if (!frame.operates(trip.row['service_id'], date)) continue;
-    for (const item of itemsOf(trip)) {
-      for (const span of activeOffsets(item, secondsIn(frame, date))) {
-        const key = `${item.window?.rowIndex ?? -1}\0${span.startSecs}`;
-        entries.set(key, frame.entry(tripId, date, span, item.window));
+    for (const { item, first, last } of frame.index.active(secondsIn(frame, date))) {
+      if (frame.operates(item.trip.row['service_id'], date)) {
+        addInstances(frame, entries, item, date, { first, last });
       }
     }
   }
   return [...entries.values()];
+}
+
+/**
+ * The number of active entries, without making one: a plain trip counts once whichever dates it
+ * is active on, the instances of other trips are counted by arithmetic, and only trips whose
+ * entries can repeat are enumerated.
+ */
+export function countActive(frame: Frame): number {
+  let total = 0;
+  const plain = new Set<string>();
+  for (const date of frame.candidates) {
+    for (const { item, first, last } of frame.index.active(secondsIn(frame, date))) {
+      if (item.exact || !frame.operates(item.trip.row['service_id'], date)) continue;
+      if (item.window) total += last - first + 1;
+      else if (!plain.has(item.trip.id)) {
+        plain.add(item.trip.id);
+        total++;
+      }
+    }
+  }
+  for (const trip of frame.index.exactTrips) total += frame.tripEntries(trip.id).length;
+  return total;
 }
 
 /** The number of entries produced on today's service date. */
@@ -329,8 +451,8 @@ export function tripOf(store: ScheduleStore, tripId: string): ScheduleTrip | und
 
 /**
  * The entry of a trip on a service date that starts at `startOffset` seconds into the day (a
- * frequency instance), or the trip's only entry when `startOffset` is null (a plain trip). Null
- * when the trip has no such entry, or none at all because of a configuration error.
+ * frequency instance), or the trip's only entry when it is a plain trip. Null when the trip has
+ * no such entry, or none at all because of a configuration error.
  */
 export function entryOn(
   frame: Frame,
@@ -344,7 +466,7 @@ export function entryOn(
   }
   if (startOffset === null) return null;
   const duration = trip.template.endSecs - trip.template.startSecs;
-  for (const window of parseFrequencyRows(trip.frequencies)) {
+  for (const window of readableWindows(trip.frequencies)) {
     const since = startOffset - window.startSecs;
     if (since >= 0 && startOffset < window.endSecs && since % window.headwaySecs === 0) {
       return frame.entry(
@@ -372,7 +494,7 @@ export function scheduledBounds(
   const duration = trip.template.endSecs - trip.template.startSecs;
   let start = Infinity;
   let end = -Infinity;
-  for (const window of parseFrequencyRows(trip.frequencies)) {
+  for (const window of readableWindows(trip.frequencies)) {
     if (window.count === 0) continue;
     const lastStart = window.startSecs + (window.count - 1) * window.headwaySecs;
     start = Math.min(start, window.startSecs);
@@ -382,7 +504,12 @@ export function scheduledBounds(
 }
 
 export function configurationErrorMessage(code: ConfigurationErrorCode): string {
-  return code === 'mixed_exact_times'
-    ? "The trip's frequencies.txt rows do not all have the same exact_times value, so its activity cannot be determined."
-    : 'The start or end of the trip cannot be computed from its stop_times.txt rows (no rows, or no time at the first or last stop), so its activity cannot be determined.';
+  switch (code) {
+    case 'mixed_exact_times':
+      return "The trip's frequencies.txt rows do not all have the same exact_times value, so its activity cannot be determined.";
+    case 'unusable_stop_times':
+      return 'The start or end of the trip cannot be computed from its stop_times.txt rows (no rows, or no time at the first or last stop), so its activity cannot be determined.';
+    case 'frequency_too_dense':
+      return 'A frequencies.txt row of the trip could have more than 2,000 instances running at once (its headway is too short for the length of its stop times), so its activity is not determined.';
+  }
 }

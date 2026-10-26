@@ -426,6 +426,56 @@ describe('row fields', () => {
   });
 });
 
+describe('empty values and zero timestamps', () => {
+  it('an empty route_id is no route: the reference route is used, for active and unscheduled rows', async () => {
+    const h = await setup({
+      trips: [
+        { id: 'a', route: '', start: '12:00:00', end: '13:00:00', headsign: 'Out' },
+        { id: 'b', route: '', start: '14:00:00', end: '15:00:00' },
+      ],
+    });
+    h.push('vehiclePositions', [
+      vehicle('1', { trip: { tripId: 'a', routeId: 'R2' } }),
+      vehicle('2', { trip: { tripId: 'b' } }),
+    ]);
+    const { withRealtime, unscheduled } = lists(h);
+    expect(withRealtime[0]).toMatchObject({ routeId: 'R2', routeShortName: '2', headsign: 'Out' });
+    expect(unscheduled[0]).toMatchObject({ tripId: 'b', routeId: null, routeShortName: null });
+    const g = await setup({ trips: [{ id: 'b', route: '', start: '14:00:00', end: '15:00:00' }] });
+    g.push('vehiclePositions', [vehicle('2', { trip: { tripId: 'b', routeId: 'R1' } })]);
+    expect(lists(g).unscheduled[0]).toMatchObject({ routeId: 'R1', routeLongName: 'One' });
+  });
+
+  it('a vehicle timestamp of 0 is none: lastSeenAt falls back to the feed timestamp', async () => {
+    const h = await setup();
+    h.push(
+      'vehiclePositions',
+      [
+        vehicle('1', { trip: { tripId: 'plain' }, vehicle: { id: 'a' }, timestamp: 0 }),
+        vehicle('2', { trip: { tripId: 'plain' }, vehicle: { id: 'b' } }),
+      ],
+      1_700_000_777,
+    );
+    expect(lists(h).withRealtime[0]!.realtime?.lastSeenAt).toBe(1_700_000_777);
+    h.push(
+      'vehiclePositions',
+      [
+        vehicle('1', { trip: { tripId: 'plain' }, timestamp: 0 }),
+        vehicle('2', { trip: { tripId: 'plain' }, timestamp: 1_700_000_100 }),
+      ],
+      1_700_000_777,
+    );
+    expect(lists(h).withRealtime[0]!.realtime?.lastSeenAt).toBe(1_700_000_100);
+  });
+
+  it('the first reference decides which feed lastSeenAt falls back to', async () => {
+    const h = await setup();
+    h.push('vehiclePositions', [vehicle('1', { trip: { tripId: 'plain' } })], 1_700_000_500);
+    h.push('tripUpdates', [update('u', { trip: { tripId: 'plain' } })], 1_700_000_400);
+    expect(lists(h).withRealtime[0]!.realtime?.lastSeenAt).toBe(1_700_000_500);
+  });
+});
+
 describe('ordering', () => {
   it('lists 1 and 2: by start, earliest first, then trip ID', async () => {
     const h = await setup({

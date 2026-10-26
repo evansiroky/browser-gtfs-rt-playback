@@ -6,13 +6,13 @@ import type {
   TripScheduleDetail,
   TripUpdateSummary,
 } from '@gtfs-rt-debugger/shared';
-import { classify, groupByTrip, inferDate, resolveReferences } from './classify.js';
+import { classify, inferDate, resolveReferences } from './classify.js';
 import {
-  activeEntriesOf,
   configurationErrorMessage,
   parseFrequencyRows,
   scheduledBounds,
   tripOf,
+  type Entry,
   type Frame,
 } from './entries.js';
 import type { StoredPing } from './pings.js';
@@ -56,17 +56,17 @@ export function buildDetail(
   const trip = tripOf(frame.store, tripId);
   if (!trip && references.length === 0 && pings.length === 0) return null;
 
-  const entries = activeEntriesOf(frame, tripId);
+  const entries = frame.tripEntries(tripId);
   const classification = classify(frame, entries, references);
-  const byTrip = groupByTrip(entries);
-  const dates = resolveReferences(frame, byTrip, references);
+  const entriesOf = (id: string): readonly Entry[] => (id === tripId ? entries : []);
+  const dates = resolveReferences(frame, entriesOf, references);
   const stated = references.flatMap((r) => (r.startDate === null ? [] : [r.startDate]));
   const serviceDate =
     stated.length > 0
       ? stated.reduce((a, b) => (b > a ? b : a))
       : dates.length > 0
         ? dates.reduce((a, b) => (b.date > a ? b.date : a), dates[0]!.date)
-        : inferDate(frame, byTrip, { tripId, startTime: null, startOffset: null });
+        : inferDate(frame, entriesOf, { tripId, startTime: null, startOffset: null });
 
   const listed: TripClassification[] = [
     ...classification.withRealtime.map((row) => ({
@@ -102,7 +102,7 @@ function scheduledDetail(
   frame: Frame,
   tripId: string,
   serviceDate: string,
-  entries: ReturnType<typeof activeEntriesOf>,
+  entries: readonly Entry[],
 ): TripScheduleDetail {
   const trip = tripOf(frame.store, tripId)!;
   const codes = frame.index.errors.get(tripId) ?? [];
@@ -125,8 +125,8 @@ function scheduledDetail(
             row: { ...window.row },
             exactTimes: window.exactTimes,
             headwaySecs: window.headwaySecs,
-            windowStart: dayStart + window.startSecs,
-            windowEnd: dayStart + window.endSecs,
+            windowStart: window.startSecs === null ? null : dayStart + window.startSecs,
+            windowEnd: window.endSecs === null ? null : dayStart + window.endSecs,
             templateDurationSecs: duration,
             activeNow: starts.length > 0,
             activeInstanceStarts: starts,

@@ -8,9 +8,21 @@ import type {
 import { toEpochSeconds, type Clock } from '../clock.js';
 import { FEED_KINDS, type FeedKind, type SnapshotStore } from '../realtime/snapshot-store.js';
 import type { ScheduleStore } from '../schedule/store.js';
-import { activeItem, classify, unscheduledItem, type Classification } from './classify.js';
+import {
+  activeItem,
+  classify,
+  classifyCounts,
+  unscheduledItem,
+  type Classification,
+} from './classify.js';
 import { buildDetail } from './detail.js';
-import { activeEntries, configurationErrorMessage, Frame, scheduledToday } from './entries.js';
+import {
+  activeEntries,
+  configurationErrorMessage,
+  countActive,
+  Frame,
+  scheduledToday,
+} from './entries.js';
 import type { PingStore } from './pings.js';
 import { latestReferences, type FeedReferences } from './references.js';
 
@@ -68,23 +80,23 @@ export class TripEngine {
       };
     }
     const frame = new Frame(store, nowMs);
-    const entries = activeEntries(frame);
-    const classification = classify(frame, entries, this.#references(feeds));
+    const active = countActive(frame);
+    const counts = classifyCounts(frame, active, this.#references(feeds));
     const agency = store.agency();
     const errors = store.configurationErrors();
     const complete = (this.#options.feeds ?? FEED_KINDS).every((feed) => feeds[feed] !== null);
     return {
       now: toEpochSeconds(nowMs),
       agency: { names: [...agency.names], timezone: agency.timezone },
-      schedule: { tripsToday: scheduledToday(frame), tripsActiveNow: entries.length },
+      schedule: { tripsToday: scheduledToday(frame), tripsActiveNow: active },
       realtime: {
         ...realtime,
-        activeTripsWithRealtime: complete ? classification.withRealtime.length : null,
+        activeTripsWithRealtime: complete ? counts.withRealtime : null,
       },
       lists: {
-        activeWithRealtime: classification.withRealtime.length,
-        activeWithoutRealtime: classification.withoutRealtime.length,
-        unscheduledWithRealtime: classification.unscheduled.length,
+        activeWithRealtime: counts.withRealtime,
+        activeWithoutRealtime: counts.withoutRealtime,
+        unscheduledWithRealtime: counts.unscheduled,
       },
       configurationErrors: {
         total: errors.length,

@@ -339,13 +339,48 @@ describe('trip detail', () => {
           '2026-10-14T07:20:00Z', // 00:20: yesterday's 24:00 and 24:20 instances, today's 00:00 and 00:20
         );
         const { scheduled } = h.engine.detail('F')!;
+        // yesterday's 24:00:00 and 24:20:00 instances start at the instants of today's 00:00:00 and
+        // 00:20:00 ones, and are the same entries
         expect(scheduled!.frequencies![0]!.activeInstanceStarts).toEqual([
           local('00:00:00'),
-          local('00:00:00'),
-          local('00:20:00'),
           local('00:20:00'),
         ]);
       });
+    });
+
+    it('keeps a frequency row it cannot read, with its columns and nulls for the values it cannot give', async () => {
+      const h = await setup({
+        trips: [
+          {
+            id: 'F',
+            start: '06:00:00',
+            end: '06:20:00',
+            freq: [
+              ['12:00:00', '12:30:00', 600, '0'],
+              ['noon', '13:00:00', 600, '0'],
+              ['12:00:00', '13:00:00', 'often', '0'],
+              ['13:00:00', '', 0, '0'],
+            ],
+          },
+        ],
+      });
+      const rows = h.engine.detail('F')!.scheduled!.frequencies!;
+      expect(
+        rows.map((r) => [r.row['start_time'], r.windowStart, r.windowEnd, r.headwaySecs]),
+      ).toEqual([
+        ['12:00:00', local('12:00:00'), local('12:30:00'), 600],
+        ['noon', null, local('13:00:00'), 600],
+        ['12:00:00', local('12:00:00'), local('13:00:00'), null],
+        ['13:00:00', local('13:00:00'), null, null],
+      ]);
+      expect(
+        rows.slice(1).map((r) => [r.activeNow, r.activeInstanceStarts, r.templateDurationSecs]),
+      ).toEqual([
+        [false, [], 1200],
+        [false, [], 1200],
+        [false, [], 1200],
+      ]);
+      expect(rows[0]!.activeNow).toBe(true);
     });
 
     describe('configuration errors', () => {
