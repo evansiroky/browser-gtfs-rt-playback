@@ -1,0 +1,40 @@
+# Keeps the pins current: the workflows pin third-party actions by major version tag, the Dockerfile pins
+# the Node base image by tag, and the lockfile and Terraform provider pin everything else.
+# Weekly, one grouped pull request per ecosystem.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: / # the root Dockerfile
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns: ['*']
+    ignore:
+      # The runtime is Node 22 (package.json engines, .nvmrc); a new Node major is a deliberate change.
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ['*']
+
+  - package-ecosystem: terraform
+    directory: /infra
+    schedule:
+      interval: weekly
+    groups:
+      terraform:
+        patterns: ['*']
