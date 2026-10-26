@@ -1,0 +1,263 @@
+# Deploy (specs/deployment.md "Deploy"): after a green CI run on main, build the image, tag it with the
+# commit SHA, push it to Artifact Registry and roll it out to the one Cloud Run service. A manual run
+# with a commit SHA is the rollback.
+#
+# Security (see also infra.yml): the `deploy` job below is the ONLY way to the deploy identity. Its
+# Workload Identity member matches `.github/workflows/deploy.yml:refs/heads/main` exactly, so the job
+# must live in this file (not in a reusable workflow elsewhere) and must run on main. There is no
+# pull_request trigger. Every input that is not a repository variable reaches the shell through `env:`.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    # Pushes that cannot change the image do not deploy; a deploy replaces the running instance and so
+    # drops its in-memory session. That includes changes to the workflows themselves: to exercise
+    # this file after editing it, run it by hand with the current main SHA (it reuses that image).
+    paths-ignore:
+      - specs/**
+      - plans/**
+      - '**/*.md'
+      - .agents/**
+      - .claude/**
+      - skills-lock.json
+      - infra/**
+      - scripts/**
+      - fixtures/**
+      - e2e/**
+      - .github/**
+      - eslint.config.js
+      - .prettierrc.json
+      - .prettierignore
+      - .editorconfig
+      - .gitignore
+      - .nvmrc
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character SHA of a commit on main to deploy (rollback). Reuses its image if the registry still has it, otherwise rebuilds it.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # Pushes are gated on a green CI run. A rollback is not: it must work while main is broken, and the
+  # commit being restored passed CI when it merged.
+  ci:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    name: Build and deploy
+    needs: ci
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.ci.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    # Serialized and never cancelled mid-flight. GitHub keeps one waiting run per group and replaces a
+    # still-waiting older one with a newer one, which is harmless for pushes (the newer commit contains
+    # the older). A rollback that is still waiting when a push arrives is replaced too: re-run it.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+      REGION: ${{ vars.GCP_REGION }}
+      SERVICE: gtfs-rt-debugger
+      REPOSITORY: gtfs-rt-debugger
+      EVENT_NAME: ${{ github.event_name }}
+      SHA_INPUT: ${{ inputs.sha }}
+    steps:
+      # A manual run from another branch would only fail at authentication, with an opaque error.
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Deploy runs only from main (this run is on '$REF'). Re-run the workflow with 'Use workflow from' set to main."
+          exit 1
+
+      - name: Require the repository variables
+        run: |
+          missing=0
+          for name in PROJECT PROJECT_NUMBER REGION; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::The repository variable for $name is not set (GCP_PROJECT_ID, GCP_PROJECT_NUMBER, GCP_REGION). Bootstrap prints them; see the README, section CI/CD."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: actions/checkout@v4 # major-version pin, kept current by .github/dependabot.yml
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the commit to deploy
+        id: commit
+        run: |
+          if [[ $EVENT_NAME == workflow_dispatch ]]; then
+            sha=$SHA_INPUT
+            if [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::The sha input must be a full 40-character lowercase hex commit SHA."
+              exit 1
+            fi
+            if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+              echo "::error::Commit $sha is not in this repository."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$sha" origin/main; then
+              echo "::error::Commit $sha is not on main; only commits on main can be deployed."
+              exit 1
+            fi
+          else
+            sha=$GITHUB_SHA
+          fi
+          {
+            echo "sha=$sha"
+            echo "image=$REGION-docker.pkg.dev/$PROJECT/$REPOSITORY/$REPOSITORY:$sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v2 # major-version pin, kept current by .github/dependabot.yml
+        with:
+          workload_identity_provider: projects/${{ vars.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github/providers/github
+          service_account: deploy@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+      # Decide what to do. The service must already exist (Terraform's first apply creates it); a deploy
+      # must never create it. A run for an older push that finishes after a newer one has deployed, or a
+      # re-run of an old run, would roll the app back, so it stands down.
+      - name: Inspect the registry and the service
+        id: plan
+        env:
+          IMAGE: ${{ steps.commit.outputs.image }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          if ! live=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
+            --format='value(spec.template.spec.containers[0].image)'); then
+            echo "::error::Could not read Cloud Run service $SERVICE in $REGION. If it does not exist yet, run the first terraform apply (README, section CI/CD); a deploy never creates the service."
+            exit 1
+          fi
+          live_tag=${live##*:}
+          if [[ $EVENT_NAME == push && $live_tag != "$SHA" && $live_tag =~ ^[0-9a-f]{40}$ ]] &&
+            git merge-base --is-ancestor "$SHA" "$live_tag" 2>/dev/null; then
+            echo "::notice::Commit $SHA is older than the commit already deployed ($live_tag); not deploying it."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
+          err=$(mktemp)
+          if gcloud artifacts docker images describe "$IMAGE" > /dev/null 2> "$err"; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'not.?found|404' "$err"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            cat "$err" >&2
+            echo "::error::Could not check Artifact Registry for $IMAGE."
+            exit 1
+          fi
+
+      # Rebuild from the commit's own tree (a worktree), but run the smoke script from this checkout.
+      - name: Check out the commit to build
+        if: steps.plan.outputs.build == 'true'
+        env:
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/src" "$SHA"
+          if [[ ! -f $RUNNER_TEMP/src/Dockerfile ]]; then
+            echo "::error::Commit $SHA has no Dockerfile, so its image cannot be rebuilt. Pick a newer commit."
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.plan.outputs.build == 'true'
+
+      # The base image the build will resolve, for traceability (a rebuilt older commit may get a newer base).
+      - name: Record the base image
+        id: base
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          base=$(awk '$1 == "FROM" { print $2; exit }' "$RUNNER_TEMP/src/Dockerfile")
+          digest=$(docker buildx imagetools inspect "$base" | awk '$1 == "Digest:" { print $2; exit }')
+          echo "base=$base@$digest" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        if: steps.plan.outputs.build == 'true'
+        with:
+          context: ${{ runner.temp }}/src
+          platforms: linux/amd64
+          build-args: GIT_SHA=${{ steps.commit.outputs.sha }}
+          tags: ${{ steps.commit.outputs.image }}
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+
+      - name: Smoke test the image before it is pushed
+        if: steps.plan.outputs.build == 'true'
+        env:
+          IMAGE: ${{ steps.commit.outputs.image }}
+        run: scripts/container-smoke.sh "$IMAGE"
+
+      - name: Push the image
+        if: steps.plan.outputs.build == 'true'
+        env:
+          IMAGE: ${{ steps.commit.outputs.image }}
+        run: docker push "$IMAGE"
+
+      # Only the image changes. Scaling, ingress, env vars, secrets and IAM belong to Terraform, so no
+      # other flag is passed (--quiet only turns off prompts).
+      - name: Deploy to Cloud Run
+        if: steps.plan.outputs.deploy == 'true'
+        env:
+          IMAGE: ${{ steps.commit.outputs.image }}
+        run: gcloud run deploy "$SERVICE" --image "$IMAGE" --region "$REGION" --project "$PROJECT" --quiet
+
+      - name: Summary
+        if: steps.plan.outputs.deploy == 'true'
+        env:
+          IMAGE: ${{ steps.commit.outputs.image }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          BASE: ${{ steps.base.outputs.base }}
+          BUILT: ${{ steps.plan.outputs.build }}
+        run: |
+          url=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format='value(status.url)')
+          digest=$(gcloud artifacts docker images describe "$IMAGE" --format='value(image_summary.digest)')
+          if [[ $BUILT == true ]]; then
+            source_line="built from this commit in this run"
+            base_line=${BASE:-unknown}
+          else
+            source_line="reused from Artifact Registry (built by an earlier run)"
+            base_line="not recorded in this run; see the summary of the run that built the image"
+          fi
+          echo "Service URL: $url"
+          {
+            echo "### Deployed $SERVICE"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`$SHA\` |"
+            echo "| Image | \`$IMAGE\` |"
+            echo "| Image digest | \`$digest\` |"
+            echo "| Image source | $source_line |"
+            echo "| Base image | \`$base_line\` |"
+            echo "| Service URL | $url |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary (stood down)
+        if: steps.plan.outputs.deploy == 'false'
+        env:
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          echo "Commit \`$SHA\` was not deployed: a newer commit is already live." >> "$GITHUB_STEP_SUMMARY"
