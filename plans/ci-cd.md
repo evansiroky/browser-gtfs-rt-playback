@@ -23,7 +23,12 @@ Configuring GitHub repository variables and running the pipelines for real is an
   trigger Deploy.
 - **Deploy** on push to `main` with app changes, after CI: build, tag with commit SHA, push to
   Artifact Registry, `gcloud run deploy --image`; serialized, never cancelled; never touches
-  service settings/secrets/env; a manually triggered **rollback** run taking a commit SHA.
+  service settings/secrets/env; a manually triggered **rollback** run taking a commit SHA, which
+  deploys the existing image for that SHA if the registry still has it and otherwise rebuilds it
+  from that commit (or fails with a clear message).
+- The deploy job must live in `deploy.yml` itself (not in a reusable workflow defined in another
+  file): the deploy identity's Workload Identity member matches `job_workflow_ref` of
+  `deploy.yml@refs/heads/main` only. Calling `ci.yml` from `deploy.yml` is fine.
 - **Infrastructure**: PR → `fmt -check`, `validate`, `plan` as the read-only **plan** identity
   with a single updating PR comment; push to `main` → plan then apply as the **apply** identity;
   serialized.

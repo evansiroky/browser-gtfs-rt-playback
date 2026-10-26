@@ -23,8 +23,9 @@ One deployable: a single container running one Node.js server process that
 3. runs the feed ingestion (schedule download, realtime polling) in the same process.
 
 The web app and API share an origin, so the browser needs no CORS. There is exactly one
-server process holding all state; the platform is configured so a second instance can never
-run (see [infrastructure.md](infrastructure.md)). State is process memory only — see
+server process holding all state; the platform is configured so at most one instance runs per revision
+(see [infrastructure.md](infrastructure.md); a deploy briefly overlaps two revisions, and the
+new one starts dormant). State is process memory only — see
 [behaviors/data-retention.md](behaviors/data-retention.md).
 
 ## Stack
