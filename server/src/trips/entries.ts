@@ -273,7 +273,7 @@ export class Frame {
   readonly index: ScheduleIndex;
   readonly timeZone: string;
   readonly #dayStarts = new Map<string, number>();
-  readonly #operates = new Map<string, boolean>();
+  readonly #operates = new Map<string, Map<string, boolean>>();
   readonly #trips = new Map<string, { serviceId: string | undefined; frequency: boolean } | null>();
   readonly #tripEntries = new Map<string, readonly Entry[]>();
 
@@ -314,11 +314,15 @@ export class Frame {
 
   operates(serviceId: string | undefined, date: string): boolean {
     if (!serviceId) return false;
-    const key = `${serviceId}\0${date}`;
-    let result = this.#operates.get(key);
+    let services = this.#operates.get(date);
+    if (!services) {
+      services = new Map();
+      this.#operates.set(date, services);
+    }
+    let result = services.get(serviceId);
     if (result === undefined) {
       result = this.store.operatesOn(serviceId, date);
-      this.#operates.set(key, result);
+      services.set(serviceId, result);
     }
     return result;
   }

@@ -383,6 +383,32 @@ describe('trip detail', () => {
       expect(rows[0]!.activeNow).toBe(true);
     });
 
+    it('lists active instances of both candidate service dates, each at its own instant', async () => {
+      // 10-hour template, an instance an hour from 00:00:00 to 30:00:00: at 00:20 the instances
+      // that started yesterday at 15:00 to 23:00 are running, and 24:00:00 yesterday is 00:00 today
+      const h = await setup(
+        {
+          trips: [
+            {
+              id: 'F',
+              start: '06:00:00',
+              end: '16:00:00',
+              freq: [['00:00:00', '30:00:00', 3600, '0']],
+            },
+          ],
+        },
+        '2026-10-14T07:20:00Z',
+      );
+      const yesterday = (hour: number) => local(`${hour}:00:00`, '20261013');
+      const expected = [15, 16, 17, 18, 19, 20, 21, 22, 23]
+        .map(yesterday)
+        .concat(local('00:00:00'));
+      expect(h.engine.detail('F')!.scheduled!.frequencies![0]!.activeInstanceStarts).toEqual(
+        expected,
+      );
+      expect(h.engine.dashboard().schedule?.tripsActiveNow).toBe(10);
+    });
+
     describe('configuration errors', () => {
       it('mixed_exact_times: shown as in the feed, no entries, no span, no active instances', async () => {
         const h = await setup({
