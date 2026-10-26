@@ -108,18 +108,37 @@ describe('schedule zip', () => {
       byTrip.set(row.trip_id!, [...(byTrip.get(row.trip_id!) ?? []), row]);
     }
     const secs = (v: string | undefined): number | null => (v ? parseHms(v) : null);
+    const { tripTimes, tripsWithoutTemplate } = sc.expected.schedule;
     for (const [tripId, rows] of byTrip) {
       const first = rows[0]!;
       const last = rows[rows.length - 1]!;
-      expect(
-        {
-          startSecs: secs(first.departure_time) ?? secs(first.arrival_time),
-          endSecs: secs(last.arrival_time) ?? secs(last.departure_time),
-        },
-        tripId,
-      ).toEqual(sc.expected.schedule.tripTimes[tripId]);
+      const startSecs = secs(first.departure_time) ?? secs(first.arrival_time);
+      const endSecs = secs(last.arrival_time) ?? secs(last.departure_time);
+      if (startSecs === null || endSecs === null) {
+        expect(tripsWithoutTemplate, tripId).toContain(tripId);
+      } else {
+        expect({ startSecs, endSecs }, tripId).toEqual(tripTimes[tripId]);
+      }
     }
-    expect(byTrip.size).toBe(sc.schedule.trips.length);
+    expect(Object.keys(tripTimes).length + tripsWithoutTemplate.length).toBe(
+      sc.schedule.trips.length,
+    );
+    // The trips without a template: no rows at all, no time at the last stop, no time at the first.
+    expect(tripsWithoutTemplate).toEqual([
+      'cfg-no-stop-times',
+      'cfg-last-stop-untimed',
+      'cfg-freq-first-stop-untimed',
+      'cfg-mixed-and-no-stop-times',
+    ]);
+    expect(byTrip.has('cfg-no-stop-times')).toBe(false);
+    expect(byTrip.get('cfg-last-stop-untimed')!.at(-1)).toMatchObject({
+      arrival_time: '',
+      departure_time: '',
+    });
+    expect(byTrip.get('cfg-freq-first-stop-untimed')![0]).toMatchObject({
+      arrival_time: '',
+      departure_time: '',
+    });
   });
 
   it('exercises dwell at terminals and arrival-only / departure-only times', () => {
@@ -135,13 +154,8 @@ describe('schedule zip', () => {
 
   it('keeps blocks free of overlapping trips', () => {
     const times = new Map<string, [number, number]>();
-    for (const t of sc.schedule.trips) {
-      const first = t.stopTimes[0]!;
-      const last = t.stopTimes[t.stopTimes.length - 1]!;
-      times.set(t.row.trip_id!, [
-        (first.departure ?? first.arrival)!,
-        (last.arrival ?? last.departure)!,
-      ]);
+    for (const [tripId, { startSecs, endSecs }] of Object.entries(sc.expected.schedule.tripTimes)) {
+      times.set(tripId, [startSecs, endSecs]);
     }
     const blocks = new Map<string, TripData[]>();
     for (const t of sc.schedule.trips.filter((t) => t.row.block_id)) {

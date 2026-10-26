@@ -89,7 +89,11 @@ export interface SessionStatus {
 
 // --- dashboard.md -------------------------------------------------------------------------------
 
-export const CONFIGURATION_ERROR_CODES = ['mixed_exact_times', 'unusable_stop_times'] as const;
+export const CONFIGURATION_ERROR_CODES = [
+  'mixed_exact_times',
+  'unusable_stop_times',
+  'frequency_too_dense',
+] as const;
 
 export type ConfigurationErrorCode = (typeof CONFIGURATION_ERROR_CODES)[number];
 
@@ -227,10 +231,12 @@ export interface TripFrequencyDetail {
   row: GtfsRow;
   /** As sent (absent = false); informational only. */
   exactTimes: boolean;
-  headwaySecs: number;
-  windowStart: EpochSeconds;
-  windowEnd: EpochSeconds;
-  templateDurationSecs: number;
+  /** Null, like the window, when the row cannot be read: it then has no instances. */
+  headwaySecs: number | null;
+  windowStart: EpochSeconds | null;
+  windowEnd: EpochSeconds | null;
+  /** Null when the trip has `unusable_stop_times`: no template exists. */
+  templateDurationSecs: number | null;
   activeNow: boolean;
   /** Nominal instances overlapping now; empty if misconfigured. */
   activeInstanceStarts: EpochSeconds[];

@@ -67,8 +67,9 @@ export interface ScheduleStore {
   /**
    * The configuration errors found at load, in `trips.txt` order (trip-activity.md): trips whose
    * `frequencies.txt` rows do not all share one `exact_times` (absent counts as 0), as
-   * `mixed_exact_times`; and trips whose `template` is null, as `unusable_stop_times`. A trip with
-   * both is listed under both codes, `mixed_exact_times` first.
+   * `mixed_exact_times`; trips whose `template` is null, as `unusable_stop_times`; and trips with a
+   * readable frequency row that could have more than `MAX_CONCURRENT_INSTANCES` instances running
+   * at once, as `frequency_too_dense`. A trip with several is listed under each code, in that order.
    */
   configurationErrors(): readonly ScheduleConfigurationError[];
   counts(): ScheduleCounts;

@@ -120,14 +120,14 @@ describe('dashboard.md', () => {
       configurationErrors: {
         total: number;
         items: {
-          code: 'mixed_exact_times' | 'unusable_stop_times';
+          code: 'mixed_exact_times' | 'unusable_stop_times' | 'frequency_too_dense';
           tripId: string;
           message: string;
         }[];
       } | null;
     }>();
     expectTypeOf<typeof CONFIGURATION_ERROR_CODES>().toEqualTypeOf<
-      readonly ['mixed_exact_times', 'unusable_stop_times']
+      readonly ['mixed_exact_times', 'unusable_stop_times', 'frequency_too_dense']
     >();
   });
 });
@@ -211,10 +211,10 @@ describe('trips.md: detail', () => {
     expectTypeOf<TripFrequencyDetail>().toEqualTypeOf<{
       row: Row;
       exactTimes: boolean;
-      headwaySecs: number;
-      windowStart: number;
-      windowEnd: number;
-      templateDurationSecs: number;
+      headwaySecs: number | null;
+      windowStart: number | null;
+      windowEnd: number | null;
+      templateDurationSecs: number | null;
       activeNow: boolean;
       activeInstanceStarts: number[];
     }>();
@@ -230,7 +230,10 @@ describe('trips.md: detail', () => {
       activeNow: boolean;
       shapeId: string | null;
       frequencies: TripFrequencyDetail[] | null;
-      configurationErrors: { code: 'mixed_exact_times' | 'unusable_stop_times'; message: string }[];
+      configurationErrors: {
+        code: 'mixed_exact_times' | 'unusable_stop_times' | 'frequency_too_dense';
+        message: string;
+      }[];
     }>();
   });
 

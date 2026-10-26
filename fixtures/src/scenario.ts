@@ -20,6 +20,7 @@ import {
   type TripUpdateSpec,
   type VehicleSpec,
   vehicleTimestamp,
+  TRIP_UPDATES_HEADER_LAG_SECS,
 } from './rt.js';
 import {
   WEEKDAY_COLUMNS,
@@ -32,8 +33,9 @@ import { addDays, formatHms, instantSeconds, serviceDateOf, weekdayOf } from './
 
 export interface ScenarioOptions {
   /**
-   * Include `freq-mixed`, the frequency trip whose rows disagree on `exact_times`, and the vehicle
-   * that references it. Default true.
+   * Include the trips with a configuration error and the vehicles that reference them:
+   * `freq-mixed` and `freq-mixed-removed-today` (rows that disagree on `exact_times`) and the
+   * four `cfg-` trips without usable stop times. Default true.
    */
   includeMisconfiguredTrip?: boolean;
 }
@@ -46,8 +48,13 @@ export interface ExpectedSchedule {
   trips: Row[];
   /** Every `frequencies.txt` row, every column. */
   frequencies: Row[];
-  /** First and last stop time per trip, seconds from the service day start (templates for frequency trips). */
+  /**
+   * First and last stop time per trip, seconds from the service day start (templates for
+   * frequency trips). Trips without usable stop times are not in it; see `tripsWithoutTemplate`.
+   */
   tripTimes: Record<string, { startSecs: number; endSecs: number }>;
+  /** Trips with no stop times, or no time at their first or last stop, in `trips.txt` order. */
+  tripsWithoutTemplate: string[];
   /** The precision-6 polyline each shape must encode to, points taken in `shape_pt_sequence` order. */
   shapes: Record<string, string>;
   /** Trips whose `shape_id` is absent from `shapes.txt`. */
@@ -77,6 +84,17 @@ export interface Scenario {
    * depends only on `seconds`, not on earlier calls. `expected` describes `now` only.
    */
   advance(seconds: number): { now: Date; vehiclePositions: Uint8Array; tripUpdates: Uint8Array };
+}
+
+/** First departure (else arrival) and last arrival (else departure); null when either is missing. */
+function templateOf(trip: TripData): { startSecs: number; endSecs: number } | null {
+  const first = trip.stopTimes[0];
+  const last = trip.stopTimes[trip.stopTimes.length - 1];
+  const startSecs = first && (first.departure ?? first.arrival);
+  const endSecs = last && (last.arrival ?? last.departure);
+  return startSecs === undefined || startSecs === null || endSecs === undefined || endSecs === null
+    ? null
+    : { startSecs, endSecs };
 }
 
 type StopStyle = 'plain' | 'dwell' | 'arrival-only';
@@ -201,7 +219,13 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
   let vehicleCount = 0;
   function addVehicle(
     ref: TripRef | null,
-    motion: { shape: string; start: number; end: number; startsOnYesterday?: boolean },
+    motion: {
+      shape: string;
+      start: number;
+      end: number;
+      startsOnYesterday?: boolean;
+      timestamp?: 'absent' | 'zero';
+    },
   ): string {
     const n = 100 + ++vehicleCount;
     const base = motion.startsOnYesterday ? yesterdayStart : dayStart;
@@ -217,6 +241,7 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
       lagSecs: 2 + (n % 7),
       occupancy: (n % 4) as VehicleSpec['occupancy'],
       occupancyPercentage: (n * 7) % 100,
+      ...(motion.timestamp && { timestamp: motion.timestamp }),
     });
     return `bus-${n}`;
   }
@@ -652,6 +677,230 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
     );
   }
 
+  // ---- entry identity and what the references of one entry disagree on ----------------------
+  // A plain trip spanning 40 h runs on both candidate dates at any time: one entry, on the later
+  // date (the earlier date's run is the same trip).
+  addTrip('plain-spans-two-days', {
+    service: 'DAILY',
+    route: 'R1',
+    shape: 'shape-market',
+    headsign: 'Long haul',
+    direction: 0,
+    times: stopTimes(0, 40 * 3600, 'plain'),
+  });
+  addVehicle(
+    { tripId: 'plain-spans-two-days' },
+    { shape: 'shape-market', start: s - 300, end: s + 900 },
+  );
+
+  // Two rows with the same headway grid whose windows overlap (09:00-13:00): an instance both
+  // rows produce is one entry, described by the first row.
+  addTrip('freq-overlapping-rows', {
+    service: 'DAILY',
+    route: 'R2',
+    shape: 'shape-mission',
+    headsign: 'Daly City',
+    direction: 0,
+    times: stopTimes(6 * 3600, 6 * 3600 + 1200, 'plain'),
+    frequencies: [
+      { start: 6 * 3600, end: 13 * 3600, headway: 600, exact: '0' },
+      { start: 9 * 3600, end: 15 * 3600, headway: 600, exact: '' },
+    ],
+  });
+  addVehicle(
+    { tripId: 'freq-overlapping-rows', startDate: today, startTime: '09:00:00' },
+    { shape: 'shape-mission', start: s - 300, end: s + 900 },
+  );
+
+  // A window past 24:00:00: yesterday's instances from 24:00:00 start at the same instants as
+  // today's from 00:00:00, and are one entry each, on today's date.
+  addTrip('freq-long-window', {
+    service: 'DAILY',
+    route: 'R3',
+    shape: 'shape-embarcadero',
+    headsign: 'Owl',
+    direction: 0,
+    times: stopTimes(0, 1800, 'plain'),
+    frequencies: [{ start: 0, end: 30 * 3600, headway: 3600, exact: '0' }],
+  });
+
+  // Two references to one active trip dated to other days than its active entry: they form one
+  // list 3 row, which takes the later date (tomorrow).
+  t = span(-300, 1500);
+  if (t) {
+    addTrip('plain-ref-two-dates', {
+      service: 'DAILY',
+      route: 'R2',
+      shape: 'shape-mission',
+      headsign: 'Daly City',
+      direction: 0,
+      times: stopTimes(t[0], t[1], 'plain'),
+    });
+    const motion = { shape: 'shape-mission', start: t[0], end: t[1] };
+    addVehicle({ tripId: 'plain-ref-two-dates', startDate: yesterday }, motion);
+    addVehicle({ tripId: 'plain-ref-two-dates', startDate: tomorrow }, motion);
+  }
+
+  // Three references to one plain trip that name different start_time values (ignored for
+  // matching): the row shows the first, vehicle positions before trip updates.
+  t = span(-900, 2100);
+  if (t) {
+    addTrip('plain-active-start-times', {
+      service: 'DAILY',
+      route: 'R1',
+      shape: 'shape-vanness',
+      headsign: 'North Beach',
+      direction: 1,
+      times: stopTimes(t[0], t[1], 'plain'),
+    });
+    const motion = { shape: 'shape-vanness', start: t[0], end: t[1] };
+    addUpdate(
+      { tripId: 'plain-active-start-times', startDate: today, startTime: '12:00:00' },
+      null,
+      [3],
+    );
+    addVehicle(
+      { tripId: 'plain-active-start-times', startDate: today, startTime: '10:00:00' },
+      motion,
+    );
+    addVehicle(
+      { tripId: 'plain-active-start-times', startDate: today, startTime: '11:00:00' },
+      motion,
+    );
+  }
+
+  // A vehicle position with no timestamp, and one whose timestamp is 0, are seen at the time of
+  // the feed that carries them (the vehicle positions header, not the trip updates one).
+  t = span(-700, 1700);
+  if (t) {
+    addTrip('plain-active-no-timestamp', {
+      service: 'DAILY',
+      route: 'R1',
+      shape: 'shape-market',
+      headsign: 'Downtown, via Market',
+      direction: 0,
+      times: stopTimes(t[0], t[1], 'plain'),
+    });
+    addVehicle(
+      { tripId: 'plain-active-no-timestamp' },
+      { shape: 'shape-market', start: t[0], end: t[1], timestamp: 'absent' },
+    );
+  }
+  t = span(-800, 1800);
+  if (t) {
+    addTrip('plain-active-zero-timestamp', {
+      service: 'DAILY',
+      route: 'R1',
+      shape: 'shape-vanness',
+      headsign: 'North Beach',
+      direction: 1,
+      times: stopTimes(t[0], t[1], 'plain'),
+    });
+    addVehicle(
+      { tripId: 'plain-active-zero-timestamp' },
+      { shape: 'shape-vanness', start: t[0], end: t[1], timestamp: 'zero' },
+    );
+    addUpdate({ tripId: 'plain-active-zero-timestamp' }, null, [2]);
+  }
+
+  // An empty route_id in trips.txt is no route: the reference's route is used.
+  t = span(-500, 1900);
+  if (t) {
+    addTrip('plain-active-empty-route', {
+      service: 'DAILY',
+      route: '',
+      shape: 'shape-mission',
+      headsign: 'Daly City',
+      direction: 0,
+      times: stopTimes(t[0], t[1], 'plain'),
+    });
+    addVehicle(
+      { tripId: 'plain-active-empty-route', routeId: 'R2' },
+      { shape: 'shape-mission', start: t[0], end: t[1] },
+    );
+  }
+
+  // Stop times from which no span can be computed (`unusable_stop_times`): no rows at all, no
+  // time at the last stop, no time at the first stop of a frequency trip's template, and both
+  // errors at once. Each would be active now if the missing times were read as zero or ignored.
+  if (includeMisconfigured) {
+    const untimed = { arrival: null, departure: null };
+    const motion = { shape: 'shape-mission', start: s - 300, end: s + 900 };
+    addTrip('cfg-no-stop-times', {
+      service: 'DAILY',
+      route: 'R2',
+      shape: 'shape-mission',
+      headsign: 'Nowhere',
+      direction: 0,
+      times: [],
+    });
+    addVehicle({ tripId: 'cfg-no-stop-times', startDate: today }, motion);
+
+    const untimedEnd = stopTimes(0, 24 * 3600, 'plain');
+    untimedEnd[untimedEnd.length - 1] = { ...untimedEnd[untimedEnd.length - 1]!, ...untimed };
+    addTrip('cfg-last-stop-untimed', {
+      service: 'DAILY',
+      route: 'R1',
+      shape: 'shape-market',
+      headsign: 'Downtown, via Market',
+      direction: 0,
+      times: untimedEnd,
+    });
+    addVehicle({ tripId: 'cfg-last-stop-untimed' }, { ...motion, shape: 'shape-market' });
+    addUpdate({ tripId: 'cfg-last-stop-untimed' }, null, [4]);
+
+    const untimedStart = stopTimes(0, 1200, 'plain');
+    untimedStart[0] = { ...untimedStart[0]!, ...untimed };
+    addTrip('cfg-freq-first-stop-untimed', {
+      service: 'DAILY',
+      route: 'R3',
+      shape: 'shape-embarcadero',
+      headsign: 'Airport',
+      direction: 0,
+      times: untimedStart,
+      frequencies: [{ start: 0, end: 26 * 3600, headway: 600, exact: '0' }],
+    });
+    addVehicle(
+      { tripId: 'cfg-freq-first-stop-untimed', startTime: hms(Math.max(0, s - (s % 600))) },
+      { ...motion, shape: 'shape-embarcadero' },
+    );
+
+    addTrip('cfg-mixed-and-no-stop-times', {
+      service: 'DAILY',
+      route: 'R3',
+      shape: 'shape-embarcadero',
+      headsign: 'Airport',
+      direction: 0,
+      times: [],
+      frequencies: [
+        { start: 0, end: 12 * 3600, headway: 600, exact: '1' },
+        { start: 12 * 3600, end: 26 * 3600, headway: 600, exact: '' },
+      ],
+    });
+    addVehicle(
+      { tripId: 'cfg-mixed-and-no-stop-times', startDate: today },
+      { ...motion, shape: 'shape-embarcadero' },
+    );
+  }
+
+  // A row that could have more than 2,000 instances running at once: a two-hour template every
+  // second (`frequency_too_dense`). Read naively it would be thousands of active entries.
+  if (includeMisconfigured) {
+    addTrip('cfg-too-dense', {
+      service: 'DAILY',
+      route: 'R3',
+      shape: 'shape-embarcadero',
+      headsign: 'Airport',
+      direction: 0,
+      times: stopTimes(0, 2 * 3600, 'plain'),
+      frequencies: [{ start: 0, end: 26 * 3600, headway: 1, exact: '0' }],
+    });
+    addVehicle(
+      { tripId: 'cfg-too-dense', startDate: today, startTime: hms(Math.max(0, s)) },
+      { shape: 'shape-embarcadero', start: s - 300, end: s + 900 },
+    );
+  }
+
   // ---- realtime that the schedule cannot explain -------------------------------------------
   addVehicle(
     {
@@ -663,6 +912,12 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
     { shape: 'shape-market', start: s - 300, end: s + 900 },
   );
   addUpdate({ tripId: 'ghost-tu-trip', startDate: today }, null, [2]);
+  // Unknown trips whose route_id is in routes.txt: the names come from that route row.
+  addVehicle(
+    { tripId: 'ghost-known-route-vp-trip', startDate: today, routeId: 'R2' },
+    { shape: 'shape-mission', start: s - 300, end: s + 900 },
+  );
+  addUpdate({ tripId: 'ghost-known-route-tu-trip', startDate: today, routeId: 'R3' }, null, [2]);
   addVehicle(null, { shape: 'shape-embarcadero', start: s - 600, end: s + 1200 });
   addVehicle(
     { tripId: '', routeId: 'R2' },
@@ -702,7 +957,7 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
     data: schedule,
     timeZone: TIMEZONE,
     nowMs,
-    feedTimestamp: nowSec,
+    feedTimestamps: { vehicles: nowSec, tripUpdates: nowSec - TRIP_UPDATES_HEADER_LAG_SECS },
     vehicles: vehicles.map((v): RefSource => ({
       ref: v.ref,
       vehicleId: v.vehicleId,
@@ -718,18 +973,12 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
     trips: trips.map((tr) => tr.row),
     frequencies: trips.flatMap((tr) => tr.frequencies),
     tripTimes: Object.fromEntries(
-      trips.map((tr) => {
-        const first = tr.stopTimes[0]!;
-        const last = tr.stopTimes[tr.stopTimes.length - 1]!;
-        return [
-          tr.row.trip_id!,
-          {
-            startSecs: (first.departure ?? first.arrival)!,
-            endSecs: (last.arrival ?? last.departure)!,
-          },
-        ];
+      trips.flatMap((tr) => {
+        const times = templateOf(tr);
+        return times ? [[tr.row.trip_id!, times]] : [];
       }),
     ),
+    tripsWithoutTemplate: trips.filter((tr) => !templateOf(tr)).map((tr) => tr.row.trip_id!),
     shapes: shapePolylines,
     tripsWithoutShape: trips
       .filter((tr) => !shapePoints.has(tr.row.shape_id!))

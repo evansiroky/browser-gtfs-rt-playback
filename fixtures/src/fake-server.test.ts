@@ -97,7 +97,7 @@ describe('control: clock', () => {
       now: new Date(NOW.getTime() + 120_000).toISOString(),
     });
     expect(await headerTime(feeds.urls.vehiclePositions)).toBe(nowSec + 120);
-    expect(await headerTime(feeds.urls.tripUpdates)).toBe(nowSec + 120);
+    expect(await headerTime(feeds.urls.tripUpdates)).toBe(nowSec + 120 - 3); // trails by 3 s
   });
 
   it('rebuilds the scenario around a new instant', async () => {
@@ -236,7 +236,7 @@ describe('control: failure modes', () => {
     for (const e of decoded.entity)
       expect(toSeconds(e.vehicle!.timestamp)!).toBeLessThan(nowSec - 3590);
     // the other feed keeps moving
-    expect(await headerTime(feeds.urls.tripUpdates)).toBe(nowSec + 90);
+    expect(await headerTime(feeds.urls.tripUpdates)).toBe(nowSec + 90 - 3);
     await control(feeds, { feed: 'vp', mode: 'ok' });
     expect(await headerTime(feeds.urls.vehiclePositions)).toBe(nowSec + 90);
   });

@@ -97,7 +97,7 @@ export interface ExpectedStats {
 }
 
 export interface ExpectedConfigurationError {
-  code: 'mixed_exact_times';
+  code: 'mixed_exact_times' | 'unusable_stop_times' | 'frequency_too_dense';
   tripId: string;
 }
 
@@ -116,8 +116,8 @@ export interface Expected {
 
 export interface RefSource {
   vehicleId: string | null;
-  /** Vehicle position timestamp, epoch seconds; absent for trip updates. */
-  timestamp?: number;
+  /** Vehicle position timestamp, epoch seconds (0 or null: none); absent for trip updates. */
+  timestamp?: number | null;
   /** null: the entity has no trip descriptor. */
   ref: TripRef | null;
 }
@@ -126,8 +126,8 @@ export interface EvaluationInput {
   data: ScheduleData;
   timeZone: string;
   nowMs: number;
-  /** Header timestamp of both feeds, epoch seconds. */
-  feedTimestamp: number;
+  /** Header timestamp of each feed, epoch seconds. */
+  feedTimestamps: { vehicles: number; tripUpdates: number };
   vehicles: readonly RefSource[];
   tripUpdates: readonly RefSource[];
 }
@@ -145,10 +145,15 @@ interface TripInfo {
   trip: TripData;
   tripId: string;
   serviceId: string;
+  /** The span (plain) or template (frequency); NaN when `unusable`. */
   startSecs: number;
   endSecs: number;
   frequencyRows: FrequencyRow[];
   mixed: boolean;
+  /** No stop times, or no time at the first or at the last stop: no span can be computed. */
+  unusable: boolean;
+  /** A row could have more than 2,000 instances running at once: ceil((D + 60) / H) > 2000. */
+  dense: boolean;
 }
 
 interface Entry {
@@ -166,14 +171,16 @@ interface Reference {
   timestamp: number | null;
   routeId: string | null;
   startTime: string | null;
+  /** Header timestamp of the feed the reference is in. */
+  feedTimestamp: number;
   date: string;
   /** Epoch seconds of `startTime` on `date`. */
   start: number | null;
 }
 
 function tripInfo(trip: TripData): TripInfo {
-  const first = trip.stopTimes[0]!;
-  const last = trip.stopTimes[trip.stopTimes.length - 1]!;
+  const first = trip.stopTimes[0];
+  const last = trip.stopTimes[trip.stopTimes.length - 1];
   const frequencyRows = trip.frequencies.map((f): FrequencyRow => {
     const exact = f.exact_times ?? '';
     return {
@@ -184,15 +191,27 @@ function tripInfo(trip: TripData): TripInfo {
       exactNormalized: exact === '' ? '0' : exact,
     };
   });
+  // start = first departure, else arrival; end = last arrival, else departure.
+  const startSecs = first && (first.departure ?? first.arrival);
+  const endSecs = last && (last.arrival ?? last.departure);
   return {
     trip,
     tripId: trip.row.trip_id!,
     serviceId: trip.row.service_id!,
-    // start = first departure, else arrival; end = last arrival, else departure.
-    startSecs: (first.departure ?? first.arrival)!,
-    endSecs: (last.arrival ?? last.departure)!,
+    startSecs: startSecs ?? NaN,
+    endSecs: endSecs ?? NaN,
     frequencyRows,
     mixed: new Set(frequencyRows.map((r) => r.exactNormalized)).size > 1,
+    unusable:
+      startSecs === undefined || startSecs === null || endSecs === undefined || endSecs === null,
+    dense:
+      startSecs !== undefined &&
+      startSecs !== null &&
+      endSecs !== undefined &&
+      endSecs !== null &&
+      frequencyRows.some(
+        (r) => Math.ceil((Math.max(endSecs - startSecs, 0) + 60) / r.headwaySecs) > 2000,
+      ),
   };
 }
 
@@ -220,7 +239,6 @@ export function evaluate(input: EvaluationInput): Expected {
   const yesterday = addDays(today, -1);
   const candidateDates = [yesterday, today];
   const minute = Math.floor(input.nowMs / 60_000) * 60;
-  const otherDate = (date: string): string => (date === today ? yesterday : today);
   const overlapsMinute = (e: { start: number; end: number }): boolean =>
     e.start < minute + 60 && e.end >= minute;
 
@@ -230,6 +248,7 @@ export function evaluate(input: EvaluationInput): Expected {
   const entriesOn = (info: TripInfo, date: string): Entry[] => {
     if (!operatesOn(data, info.serviceId, date)) return [];
     const at = (secs: number): number => instantSeconds(date, secs);
+    if (info.unusable || info.dense) return [];
     if (info.frequencyRows.length === 0) {
       return [
         {
@@ -241,9 +260,9 @@ export function evaluate(input: EvaluationInput): Expected {
         },
       ];
     }
-    if (info.mixed) return [];
+    if (info.mixed || info.dense) return [];
     const duration = info.endSecs - info.startSecs;
-    return info.frequencyRows.flatMap((row) => {
+    const instances = info.frequencyRows.flatMap((row) => {
       const frequency: FrequencyInfo = {
         exactTimes: row.exactTimes,
         headwaySecs: row.headwaySecs,
@@ -256,26 +275,23 @@ export function evaluate(input: EvaluationInput): Expected {
       }
       return out;
     });
+    // An instance is identified by its start instant: the first row to produce it describes it.
+    return instances.filter((e, i) => instances.findIndex((f) => f.start === e.start) === i);
   };
 
   const tripsToday = [...trips.values()].reduce((n, t) => n + entriesOn(t, today).length, 0);
 
-  const active: Entry[] = [];
+  // A plain trip is one entry, an instance is identified by its start instant; an entry produced
+  // on both candidate dates is on the later one (candidateDates is in date order).
+  const activeByIdentity = new Map<string, Entry>();
   for (const info of trips.values()) {
-    const byOffset = new Map<number, Entry>();
     for (const date of candidateDates) {
       for (const e of entriesOn(info, date).filter(overlapsMinute)) {
-        const offset = e.start - instantSeconds(date, 0);
-        if (byOffset.get(offset)?.date === otherDate(date)) {
-          throw new Error(
-            `scenario is ambiguous: ${info.tripId} is active on both candidate dates`,
-          );
-        }
-        byOffset.set(offset, e);
-        active.push(e);
+        activeByIdentity.set(e.frequency === null ? e.tripId : `${e.tripId}@${e.start}`, e);
       }
     }
   }
+  const active: Entry[] = [...activeByIdentity.values()];
   /**
    * Step 1 of the service-date inference: the candidate dates on which the trip has an active entry
    * (for a frequency trip whose reference has a start_time, an active instance starting at exactly
@@ -315,9 +331,11 @@ export function evaluate(input: EvaluationInput): Expected {
         isVehicle,
         tripId: ref.tripId,
         vehicleId,
-        timestamp: timestamp ?? null,
+        // a timestamp of 0 is none
+        timestamp: timestamp ? timestamp : null,
         routeId: ref.routeId ?? null,
         startTime: ref.startTime ?? null,
+        feedTimestamp: isVehicle ? input.feedTimestamps.vehicles : input.feedTimestamps.tripUpdates,
         date,
         start: ref.startTime === undefined ? null : instantSeconds(date, parseHms(ref.startTime)),
       });
@@ -329,36 +347,40 @@ export function evaluate(input: EvaluationInput): Expected {
   const matches = (e: Entry, r: Reference): boolean =>
     e.tripId === r.tripId && e.date === r.date && (e.frequency === null || e.start === r.start);
 
-  /** Route and headsign of a row; the route ID falls back to the reference's for an unknown trip. */
+  /**
+   * Route and headsign of a row. The route ID is the trip's (an empty one is none), else the
+   * first one the references carry; the names come from the `routes.txt` row of that route ID
+   * whichever trip it is for, and are null when the route ID is null or not in `routes.txt`.
+   */
   const routeFields = (
     tripId: string,
-    referenceRouteId: string | null = null,
+    refs: readonly Reference[],
   ): Pick<RowBase, 'routeId' | 'routeShortName' | 'routeLongName' | 'headsign'> => {
     const row = trips.get(tripId)?.trip.row;
-    const route = row ? routes.get(row.route_id!) : undefined;
+    const routeId = row?.route_id || (refs.find((r) => r.routeId !== null)?.routeId ?? null);
+    const route = routeId === null ? undefined : routes.get(routeId);
     return {
-      routeId: row?.route_id ?? referenceRouteId,
-      routeShortName: route?.route_short_name ?? null,
-      routeLongName: route?.route_long_name ?? null,
-      headsign: row?.trip_headsign ?? null,
+      routeId,
+      routeShortName: route?.route_short_name || null,
+      routeLongName: route?.route_long_name || null,
+      headsign: row?.trip_headsign || null,
     };
   };
 
   const realtimeInfo = (refs: Reference[]): RealtimeInfo => {
-    const startTimes = new Set(refs.map((r) => r.startTime));
-    if (startTimes.size > 1)
-      throw new Error('scenario is ambiguous: references disagree on start_time');
+    const timestamps = refs.flatMap((r) =>
+      r.isVehicle && r.timestamp !== null ? [r.timestamp] : [],
+    );
     return {
       vehicleIds: [
         ...new Set(refs.flatMap((r) => (r.vehicleId === null ? [] : [r.vehicleId]))),
       ].sort(),
       hasVehiclePosition: refs.some((r) => r.isVehicle),
       hasTripUpdate: refs.some((r) => !r.isVehicle),
-      startTime: refs[0]!.startTime,
-      lastSeenAt: Math.max(
-        ...refs.flatMap((r) => (r.isVehicle && r.timestamp !== null ? [r.timestamp] : [])),
-        ...(refs.some((r) => r.isVehicle) ? [] : [input.feedTimestamp]),
-      ),
+      // several references: the first with a start_time, vehicle positions before trip updates
+      startTime: refs.find((r) => r.startTime !== null)?.startTime ?? null,
+      // the newest vehicle timestamp, else the header timestamp of the first reference's feed
+      lastSeenAt: timestamps.length > 0 ? Math.max(...timestamps) : refs[0]!.feedTimestamp,
     };
   };
 
@@ -368,7 +390,7 @@ export function evaluate(input: EvaluationInput): Expected {
       const row: ExpectedActiveRow = {
         tripId: e.tripId,
         serviceDate: e.date,
-        ...routeFields(e.tripId),
+        ...routeFields(e.tripId, refs),
         scheduledStart: e.start,
         scheduledEnd: e.end,
         frequency: e.frequency,
@@ -388,22 +410,20 @@ export function evaluate(input: EvaluationInput): Expected {
 
   const unscheduled = [...groups.values()].map(
     (refs): { row: ExpectedUnscheduledRow; sortStart: number } => {
-      const ref = refs[0]!;
-      if (refs.some((r) => r.date !== ref.date)) {
-        throw new Error(`scenario is ambiguous: ${ref.tripId} is referenced on two service dates`);
-      }
+      // a group naming several service dates takes the latest (the first of equals)
+      const ref = refs.reduce((best, r) => (r.date > best.date ? r : best));
       const info = trips.get(ref.tripId);
       const instances = info ? entriesOn(info, ref.date) : [];
       const named = instances.find((e) => matches(e, ref));
       let reason: Reason;
       if (!info) reason = 'unknown_trip';
-      else if (info.mixed) reason = 'configuration_error';
+      else if (info.mixed || info.unusable || info.dense) reason = 'configuration_error';
       else if (!operatesOn(data, info.serviceId, ref.date)) reason = 'not_in_service';
       else if (info.frequencyRows.length > 0 && ref.start === null) reason = 'missing_start_time';
       else if (info.frequencyRows.length > 0 && !named) reason = 'unmatched_start_time';
       else reason = 'outside_scheduled_time';
       const window =
-        info && !info.mixed && ref.start !== null
+        info && !info.mixed && !info.unusable && !info.dense && ref.start !== null
           ? info.frequencyRows
               .map((row) => ({
                 row,
@@ -416,7 +436,7 @@ export function evaluate(input: EvaluationInput): Expected {
         tripId: ref.tripId,
         serviceDate: ref.date,
         reason,
-        ...routeFields(ref.tripId, ref.routeId),
+        ...routeFields(ref.tripId, refs),
         frequency: window
           ? {
               exactTimes: window.row.exactTimes,
@@ -459,10 +479,12 @@ export function evaluate(input: EvaluationInput): Expected {
       activeWithoutRealtime: activeRows.filter((r) => r.realtime === null),
       unscheduledWithRealtime: unscheduled.map(({ row }) => row),
     },
-    configurationErrors: [...trips.values()]
-      .filter((t) => t.mixed)
-      .map((t): ExpectedConfigurationError => ({ code: 'mixed_exact_times', tripId: t.tripId }))
-      .sort((a, b) => compare(a.tripId, b.tripId)),
+    // In trips.txt order; a trip with several problems is listed under each, in this order.
+    configurationErrors: [...trips.values()].flatMap((t): ExpectedConfigurationError[] => [
+      ...(t.mixed ? [{ code: 'mixed_exact_times' as const, tripId: t.tripId }] : []),
+      ...(t.unusable ? [{ code: 'unusable_stop_times' as const, tripId: t.tripId }] : []),
+      ...(t.dense ? [{ code: 'frequency_too_dense' as const, tripId: t.tripId }] : []),
+    ]),
   };
 }
 

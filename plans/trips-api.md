@@ -25,6 +25,15 @@ Out: engine logic (done); shapes endpoint (done in [`schedule-loader`](schedule-
   trip IDs; `404 trip_not_found`), `409 session_not_active` / `409 schedule_not_ready`, ordering,
   complete lists (no pagination), pass-through of VehiclePosition fields.
 - `api/conventions.md`: envelope, `no-store`, camelCase, epoch seconds, service dates informational.
+- The amendments the [`trip-engine`](trip-engine.md) review made to these specs, which the endpoints
+  must serve: `configurationErrors.total` counts errors (a trip with two codes counts twice) and the
+  code enum has `frequency_too_dense`; `realtime.activeTripsWithRealtime` is null until every
+  configured feed has a snapshot (so equals `lists.activeWithRealtime` only when not null);
+  `templateDurationSecs`, and `headwaySecs`, `windowStart`, `windowEnd` of a frequency row that
+  cannot be read, are nullable; a ping `timestamp` falls back to the header timestamp, then the
+  receive time; the `404` is: not in the schedule, the latest snapshots or any retained ping.
+  `TripEngine` (`server/src/trips/engine.ts`) already returns the `shared` types: create it (and the
+  `PingStore`, before the first snapshot) in `buildApp` with `feeds` from the configured URLs.
 
 ## Approach
 - `server/src/api/{dashboard,trips}.ts` registering routes; strict query validation helper
@@ -38,6 +47,8 @@ Out: engine logic (done); shapes endpoint (done in [`schedule-loader`](schedule-
 
 ## Validation
 - [ ] `npm run lint`, `typecheck`, `test`, `build` pass.
+- [ ] A trip with `frequency_too_dense` (and one with an unreadable frequency row) is served by the
+      dashboard items and the detail as specified, over HTTP.
 - [ ] End-to-end API tests over HTTP match the scenario's `expected` for dashboard, all three
       lists, and detail (classification entries, scheduled block incl. frequencies and active
       instance starts, configuration errors, pings with stable sequence numbers, latest trip update).

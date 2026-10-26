@@ -30,9 +30,8 @@ For a trip with `frequencies.txt` rows, the start/end derived from `stop_times.t
 
 ## Schedule entry
 The unit the dashboard counts and lists: one per plain trip, and one per frequency instance
-(a nominal departure of a `frequencies.txt` row). A frequency trip with the mixed-`exact_times`
-configuration error has none. Defined in
-[behaviors/trip-activity.md](behaviors/trip-activity.md#schedule-entries).
+(a nominal departure of a `frequencies.txt` row). A trip with a configuration error has none.
+Defined in [behaviors/trip-activity.md](behaviors/trip-activity.md#schedule-entries).
 
 ## Shape
 From `shapes.txt`: for each `shape_id`, the points ordered by `shape_pt_sequence`, held
@@ -60,11 +59,13 @@ vehicle statistics but cannot be listed or linked.
 ## Ping
 One observation of a vehicle on a trip, taken from a `VehiclePosition` entity. A ping is
 identified by (trip ID, vehicle ID, vehicle `timestamp`); the same triple seen in later
-snapshots is the same ping and is recorded once. When a vehicle position has no `timestamp`,
-the snapshot's feed header timestamp stands in for it. When a vehicle position has no vehicle
-ID, the entity ID stands in. A ping keeps the `start_date` and `start_time` of its trip
+snapshots is the same ping and is recorded once. When a vehicle position has no `timestamp` (or
+a timestamp of 0), the snapshot's feed header timestamp stands in for it, and when the header has none either, the
+time the server received the snapshot. When a vehicle position has no vehicle ID, the entity ID
+stands in. A ping keeps the `start_date` and `start_time` of its trip
 reference, so pings of different frequency instances or vehicles on the same trip ID stay
-distinguishable.
+distinguishable. The app keeps only each ping's identity and number; its fields are read from a
+retained snapshot that contains it ([data-retention](behaviors/data-retention.md)).
 
 Each trip ID has a **ping sequence**: integers assigned 1, 2, 3… in order of first receipt
 since the activation began. Numbers are never reassigned when old pings expire

@@ -34,10 +34,10 @@ describe('encoded feeds', () => {
     expect(pb.FeedMessage.encode(tu).finish()).toEqual(sc.tripUpdates);
   });
 
-  it('carry a header timestamp equal to now, in whole seconds', () => {
+  it('carry a header timestamp in whole seconds: now, and now minus 3 s for trip updates', () => {
     expect(vp.header.gtfsRealtimeVersion).toBe('2.0');
     expect(toSeconds(vp.header.timestamp)).toBe(nowSec);
-    expect(toSeconds(tu.header.timestamp)).toBe(nowSec);
+    expect(toSeconds(tu.header.timestamp)).toBe(nowSec - 3);
   });
 
   it('give every vehicle position realistic fields', () => {
@@ -48,8 +48,11 @@ describe('encoded feeds', () => {
       seenIds.add(v.vehicle!.id!);
       expect(v.vehicle?.label).toMatch(/^Bus \d+$/);
       const timestamp = toSeconds(v.timestamp)!;
-      expect(nowSec - timestamp).toBeGreaterThanOrEqual(2);
-      expect(nowSec - timestamp).toBeLessThanOrEqual(8);
+      // two vehicles deliberately carry no timestamp, and a zero one (see scenario.ts)
+      if (Object.hasOwn(v, 'timestamp') && timestamp !== 0) {
+        expect(nowSec - timestamp).toBeGreaterThanOrEqual(2);
+        expect(nowSec - timestamp).toBeLessThanOrEqual(8);
+      }
       expect(v.position!.latitude).toBeGreaterThan(37.7);
       expect(v.position!.latitude).toBeLessThan(37.82);
       expect(v.position!.longitude).toBeGreaterThan(-122.5);
@@ -125,7 +128,11 @@ describe('advance', () => {
     const moved = before.filter((v, i) => {
       const w = after[i]!;
       expect(w.vehicle!.id).toBe(v.vehicle!.id);
-      expect(toSeconds(w.timestamp)).toBe(toSeconds(v.timestamp)! + 60);
+      const timestamp = toSeconds(v.timestamp)!;
+      // a vehicle with no timestamp, or a zero one, keeps it
+      expect(toSeconds(w.timestamp)).toBe(
+        Object.hasOwn(v, 'timestamp') && timestamp !== 0 ? timestamp + 60 : timestamp,
+      );
       return (
         distanceMeters(
           [v.position!.latitude, v.position!.longitude],
@@ -149,7 +156,8 @@ describe('advance', () => {
         triples.add(`${v.trip?.tripId}|${v.vehicle!.id}|${String(toSeconds(v.timestamp))}`);
       }
     }
-    expect(triples.size).toBe(4 * sc.expected.stats.vehicles);
+    // the vehicles without a timestamp, and with a zero one, repeat the same triple every poll
+    expect(triples.size).toBe(4 * (sc.expected.stats.vehicles - 2) + 2);
     const trips = (seconds: number): (string | null | undefined)[] =>
       vehicles(decodeFeed(sc.advance(seconds).vehiclePositions)).map((v) => v.trip?.tripId);
     expect(trips(600)).toEqual(trips(0));
@@ -157,6 +165,6 @@ describe('advance', () => {
 
   it('can look backwards', () => {
     const header = decodeFeed(sc.advance(-3600).tripUpdates).header;
-    expect(toSeconds(header.timestamp)).toBe(nowSec - 3600);
+    expect(toSeconds(header.timestamp)).toBe(nowSec - 3603);
   });
 });
