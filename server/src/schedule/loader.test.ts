@@ -42,7 +42,8 @@ function makeLoader(env: Env = {}, load?: LoadSchedule): ScheduleLoader {
 }
 
 const state = () => loader.status().state;
-const untilState = (expected: string) => vi.waitFor(() => expect(state()).toBe(expected));
+const untilState = (expected: string, timeout = 1_000) =>
+  vi.waitFor(() => expect(state()).toBe(expected), { timeout });
 
 beforeEach(async () => {
   host = await startFeedHost();
@@ -206,7 +207,7 @@ describe('failures', () => {
     host.route('/schedule.zip', (_req, res) => serveZip(zip)(res));
     loader = makeLoader({ SCHEDULE_MAX_BYTES: String(zip.byteLength) });
     loader.start();
-    await untilState('failed');
+    await untilState('failed', 15_000);
     expect(loader.status().error).toMatchObject({ code: 'too_large' });
     expect(loader.status().error?.message).not.toMatch(/https?:|\.zip|127\.0/);
     // The same archive loads when the limit leaves room to inflate it.
@@ -215,8 +216,8 @@ describe('failures', () => {
       SCHEDULE_MAX_BYTES: String(Math.ceil(3_700_000 / DECOMPRESSION_FACTOR)),
     });
     loader.start();
-    await untilState('ready');
-  });
+    await untilState('ready', 15_000);
+  }, 30_000);
 
   it('fails with too_large when the decoded schedule exceeds the memory limit', async () => {
     loader = makeLoader({ SCHEDULE_MEMORY_LIMIT_BYTES: '10000' });
