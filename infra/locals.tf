@@ -40,7 +40,10 @@ locals {
     },
   )
 
-  budget_enabled = var.manage_budget && var.billing_account != ""
+  # The billing account the project is linked to, unless overridden. CI has no billing-account
+  # input, so deriving it keeps local and CI plans identical. Empty when billing is not linked.
+  linked_billing_account = data.google_project.this.billing_account == null ? "" : data.google_project.this.billing_account
+  billing_account        = var.billing_account != "" ? var.billing_account : local.linked_billing_account
 }
 
 data "google_project" "this" {
