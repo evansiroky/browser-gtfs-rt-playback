@@ -208,6 +208,7 @@ export class Frame {
   readonly timeZone: string;
   readonly #dayStarts = new Map<string, number>();
   readonly #operates = new Map<string, boolean>();
+  readonly #trips = new Map<string, { serviceId: string | undefined; frequency: boolean } | null>();
 
   constructor(
     readonly store: ScheduleStore,
@@ -229,6 +230,19 @@ export class Frame {
       this.#dayStarts.set(date, start);
     }
     return start;
+  }
+
+  /** What a reference needs to know of its trip, looked up once per trip per computation. */
+  tripFacts(tripId: string): { serviceId: string | undefined; frequency: boolean } | null {
+    let facts = this.#trips.get(tripId);
+    if (facts === undefined) {
+      const row = this.store.trip(tripId);
+      facts = row
+        ? { serviceId: row['service_id'], frequency: this.store.frequencies(tripId).length > 0 }
+        : null;
+      this.#trips.set(tripId, facts);
+    }
+    return facts;
   }
 
   operates(serviceId: string | undefined, date: string): boolean {

@@ -197,6 +197,50 @@ interface ScheduleStore {
   after other shapes' rows, the file is known to be ungrouped and is read again, buffering all shapes
   (counted toward the memory limit) and encoding each when the file ends.
 
+## Trip engine
+
+`TripEngine` (`src/trips/engine.ts`) is the pure logic behind the dashboard and the trips API
+(trip-activity.md); the HTTP routes that expose it come with the `trips-api` plan. It is built from
+the clock, the `SnapshotStore`, a `PingStore` and a function returning the loaded `ScheduleStore`
+(or `null`), and its three calls return the shared API types:
+
+- `dashboard()` - a `DashboardResponse` (schedule-dependent fields null while the schedule is not
+  ready; `configurationErrors.total` counts errors, so a trip with both codes counts twice).
+- `list(name)` - a `TripListResponse`; throws `ScheduleNotReadyError` before the schedule is ready.
+- `detail(tripId)` - a `TripDetailResponse`, or `null` when the trip ID is in neither the schedule nor
+  the retained realtime data (a latest-snapshot reference or a retained ping).
+
+Every call reads the schedule, the latest snapshots (decoded again from their bytes), the pings and the
+clock afresh; nothing derived from time or from realtime data is kept. The one structure that outlives a
+call is `ScheduleIndex` (`entries.ts`), the entries ordered by start second plus the entries per service
+and the configuration errors per trip: a pure function of the immutable store, held in a `WeakMap` keyed
+by it, so it goes with the store at dormancy. It makes "active this minute" and "scheduled today" cost
+the active entries and the services rather than every trip.
+
+- **Time** (`time.ts`) is `Intl.DateTimeFormat` in the agency zone: the service day starts at local noon
+  minus 12 hours of elapsed time, and the candidate dates are today and yesterday as the agency clock reads
+  them. On the evening before a spring-forward day the next service day has already started (23:00) while
+  "today" is still the day before, so its early trips are not looked at until midnight.
+- **Entries.** A plain trip is one entry. A frequency trip is one entry per nominal instance of each
+  readable row (`HH:MM:SS` times, a positive whole `headway_secs`); instances are counted and found by
+  arithmetic, never listed, so a row of one-second headways costs nothing. Rows that overlap produce
+  their instances separately, one entry each. A trip with a configuration error has none. An entry active
+  on both candidate dates is one entry, on the later.
+- **References** come from the latest snapshot of each feed; an absent optional field is null, never the
+  decoder's default 0. `start_date` must be a real `YYYYMMDD` date; `start_time` is parsed with
+  `parseGtfsTime` (hours may pass 24, a single digit is fine) and an unreadable one matches no instance.
+- **Pings** (`pings.ts`): `PingStore` listens to the snapshot store. Pings are kept while a retained
+  snapshot contains them; their estimated size is reserved against the history memory limit
+  (`SnapshotStore.reserveMemory`), so memory-limit eviction also expires them. `forTrip` is ascending by
+  sequence; sequences per trip ID restart only at dormancy. Vehicle position fields beyond the typed ones
+  are passed through under their camelCase names (`vehicle` and `trip` hold the leftovers of those
+  messages, `position` those of the position).
+- **List 3 rows** are grouped by trip ID (and start for frequency trips); a group naming several service
+  dates takes the latest and the reason is worked out from that reference. `realtime.vehicleIds` is in
+  order of appearance (vehicle positions, then trip updates), without references that lack a vehicle ID.
+- **Empty cells** in `trips.txt` and `routes.txt` (`trip_headsign`, `route_short_name`, `route_long_name`,
+  `route_id`, `shape_id`) are reported as null; the trip and route rows themselves are returned whole.
+
 ## Benchmark
 
 `scripts/bench-schedule.mjs` (not part of `npm test`; needs `npm run build -w server`) generates a
@@ -213,6 +257,17 @@ It prints peak RSS, peak and retained heap (after a forced GC), the loader's own
 worst event-loop stall, and checks that shapes are strings. `--ungrouped` interleaves the points of
 all shapes to exercise the buffered path; `--limit` shows the `too_large` abort. The numbers measured
 for this implementation are in [`plans/schedule-loader.md`](../plans/schedule-loader.md).
+
+`scripts/bench-trips.mjs` (same rules) times the trip engine over a synthetic schedule built straight
+into a `MemoryScheduleStore` (default 100 000 trips, 10% of them frequency trips) with a vehicle
+positions and a trip updates snapshot (default 5 000 and 3 000 entities, mostly naming active trips):
+
+```bash
+node server/scripts/bench-trips.mjs [--trips N] [--vehicles N] [--updates N] [--runs N] [--zone TZ] [--now ISO]
+```
+
+It prints the first call (which builds the schedule index) and p50/p95/max of each list, the dashboard
+and a trip detail. The numbers measured are in [`plans/trip-engine.md`](../plans/trip-engine.md).
 
 ## Threat model
 

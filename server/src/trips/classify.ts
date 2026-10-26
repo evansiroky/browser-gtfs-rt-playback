@@ -38,7 +38,7 @@ export interface UnscheduledRow {
   readonly tripId: string;
   readonly date: string;
   readonly reason: TripReason;
-  /** The entry the reference names, when there is one (every reason but the first three). */
+  /** The entry the reference names: only for outside_scheduled_time, the one reason that has it. */
   readonly named: Entry | null;
   /** For a frequency trip, the row whose window contains the reference's start. */
   readonly window: FrequencyWindow | null;
@@ -100,7 +100,7 @@ export function inferDate(
     );
     if (has) return date;
   }
-  const serviceId = frame.store.trip(reference.tripId)?.['service_id'];
+  const serviceId = frame.tripFacts(reference.tripId)?.serviceId;
   return later.find((date) => frame.operates(serviceId, date)) ?? frame.today;
 }
 
@@ -164,7 +164,7 @@ export function classify(
 function unscheduledRows(frame: Frame, unmatched: readonly ResolvedReference[]): UnscheduledRow[] {
   const groups = new Map<string, ResolvedReference[]>();
   for (const reference of unmatched) {
-    const frequency = frame.store.frequencies(reference.tripId).length > 0;
+    const frequency = frame.tripFacts(reference.tripId)?.frequency ?? false;
     const start = frequency ? (reference.start ?? `raw:${reference.startTime}`) : '';
     const key = JSON.stringify([reference.tripId, start]);
     const group = groups.get(key);
@@ -290,8 +290,8 @@ export function unscheduledItem(frame: Frame, row: UnscheduledRow): TripListItem
       row.tripId,
       row.references.find((r) => r.routeId !== null)?.routeId ?? null,
     ),
-    scheduledStart: row.reason === 'outside_scheduled_time' ? (row.named?.start ?? null) : null,
-    scheduledEnd: row.reason === 'outside_scheduled_time' ? (row.named?.end ?? null) : null,
+    scheduledStart: row.named?.start ?? null,
+    scheduledEnd: row.named?.end ?? null,
     frequency: frequencyOf(row.window, frame.dayStart(row.date)),
     realtime: realtimeOf(row.references),
     reason: row.reason,

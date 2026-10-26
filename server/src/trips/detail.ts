@@ -84,8 +84,8 @@ export function buildDetail(
     ...classification.unscheduled.map((row) => ({
       list: 'unscheduled-with-realtime' as const,
       reason: row.reason,
-      start: row.reason === 'outside_scheduled_time' ? (row.named?.start ?? null) : null,
-      end: row.reason === 'outside_scheduled_time' ? (row.named?.end ?? null) : null,
+      start: row.named?.start ?? null,
+      end: row.named?.end ?? null,
     })),
   ];
 

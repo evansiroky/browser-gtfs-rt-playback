@@ -411,6 +411,60 @@ describe('schedule entries and counts', () => {
   });
 });
 
+describe('daylight-saving days, with the instants worked out by hand (America/Los_Angeles)', () => {
+  const trips: ScheduleSpec['trips'] = [
+    { id: 'first', start: '00:00:00', end: '00:15:00' },
+    { id: 'second', start: '00:30:00', end: '01:00:00' },
+    { id: 'late', start: '02:30:00', end: '02:45:00' },
+    { id: 'owl', start: '24:10:00', end: '24:30:00' },
+    { id: 'day', start: '03:00:00', end: '04:00:00' },
+  ];
+  const active = (h: Awaited<ReturnType<typeof setup>>) =>
+    h.engine
+      .list('active-without-realtime')
+      .trips.map((t) => [t.tripId, t.serviceDate, t.scheduledStart]);
+  const Z = (iso: string) => Date.parse(iso) / 1000;
+
+  it('fall back (2026-11-01): the service day starts at 01:00 PDT = 08:00Z and has 25 hours', async () => {
+    // 08:40Z is 01:40 PDT, the first time the clock reads that
+    const h = await setup({ trips }, '2026-11-01T08:40:00Z');
+    expect(active(h)).toEqual([['second', '20261101', Z('2026-11-01T08:30:00Z')]]);
+    expect(h.engine.dashboard().schedule).toEqual({ tripsToday: 5, tripsActiveNow: 1 });
+    // 24:00:00-25:00:00 is 08:00Z-09:00Z on the 2nd, 00:00-01:00 PST; the 1st is a 25-hour day
+    const night = { trips: [{ id: 'long', start: '24:00:00', end: '25:00:00' }] };
+    const later = await setup(night, '2026-11-02T08:30:00Z');
+    expect(active(later)).toEqual([['long', '20261101', Z('2026-11-02T08:00:00Z')]]);
+    expect(active(await setup(night, '2026-11-02T09:01:00Z'))).toEqual([]);
+  });
+
+  it('fall back, just after midnight PDT: today is the 1st but its day has not started; the 31st is running', async () => {
+    const h = await setup({ trips }, '2026-11-01T07:20:00Z'); // 00:20 PDT
+    // the 31st starts at 07:00Z, so 24:10:00-24:30:00 is 07:10Z-07:30Z; the 1st's trips start at 08:00Z
+    expect(active(h)).toEqual([['owl', '20261031', Z('2026-11-01T07:10:00Z')]]);
+    expect(h.engine.dashboard().schedule?.tripsToday).toBe(5);
+  });
+
+  it('spring forward (2026-03-08): the service day starts at 23:00 PST the evening before = 07:00Z and has 23 hours', async () => {
+    // 10:30Z is 03:30 PDT; 03:00:00-04:00:00 is 10:00Z-11:00Z, and 02:30:00-02:45:00 (09:30Z) is over
+    const h = await setup({ trips }, '2026-03-08T10:30:00Z');
+    expect(active(h)).toEqual([['day', '20260308', Z('2026-03-08T10:00:00Z')]]);
+    // the owl of the 7th (24:10:00-24:30:00 from 08:00Z on the 7th) runs 08:10Z-08:30Z on the 8th
+    // = 00:10-00:30 PST; the trips of the 8th (from 07:00Z) are over or not started
+    const owl = await setup({ trips }, '2026-03-08T08:20:00Z');
+    expect(active(owl)).toEqual([['owl', '20260307', Z('2026-03-08T08:10:00Z')]]);
+  });
+
+  it('only today and yesterday are candidate service dates', async () => {
+    // 07:30Z on 2026-03-08 is 23:30 PST on the 7th: the service day of the 8th has started
+    // (07:00Z), but today is still the 7th, and the 8th's trips are not looked at
+    const h = await setup({ trips }, '2026-03-08T07:10:00Z');
+    expect(h.engine.list('active-without-realtime').trips.map((t) => t.serviceDate)).not.toContain(
+      '20260308',
+    );
+    expect(h.engine.dashboard().schedule?.tripsToday).toBe(5);
+  });
+});
+
 describe('schedule not ready', () => {
   it('has null schedule-dependent figures but still counts the feeds', async () => {
     const h = harness({ now: NOW });
