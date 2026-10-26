@@ -108,3 +108,85 @@ scripts all run `tsc -b` first, and it is first in the `workspaces` order, so by
 package's scripts run, `shared` is built. Every package's tests and typecheck may rely on that.
 After changing `shared`, run `npm run build -w shared` before running another package's scripts on
 their own.
+
+## CI/CD
+
+Three GitHub Actions workflows in [`.github/workflows/`](.github/workflows/) are the only path to the
+environment after bootstrap ([`specs/deployment.md`](specs/deployment.md)). Authentication is Workload
+Identity Federation only; no key and no GitHub secret exists.
+
+| Workflow     | Runs on                                                                                      | Does                                                                                                                                                                                                                         | Identity                                      |
+| ------------ | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `ci.yml`     | every pull request, every push to `main`, called by `deploy.yml`                             | lint, typecheck, tests, build, format check, `npm audit` (prod, high); shellcheck and the script tests; actionlint and the workflow security invariants; Terraform fmt and validate; image build and smoke test (not pushed) | none (read-only, no OIDC)                     |
+| `infra.yml`  | pull requests and pushes to `main` that change `infra/` or the workflow                      | PR: `fmt -check`, `validate`, `plan`, one updating PR comment. `main`: `plan`, then `apply`                                                                                                                                  | PR: `tf-plan` (read-only). `main`: `tf-apply` |
+| `deploy.yml` | push to `main` that changes app code (not docs, `infra/`, `scripts/`, `.github/`), or manual | after `ci.yml`: build, smoke test, push `<region>-docker.pkg.dev/<project>/gtfs-rt-debugger/gtfs-rt-debugger:<sha>`, `gcloud run deploy --image` (nothing else). Manual run with a SHA is the rollback                       | `deploy`, from `deploy.yml` on `main` only    |
+
+### Repository variables
+
+Settings > Secrets and variables > Actions > **Variables** (not secrets). `scripts/bootstrap.sh` prints
+all four with ready-made `gh variable set` commands; `terraform output github_variables` prints them again.
+
+| Variable             | Value                           |
+| -------------------- | ------------------------------- |
+| `GCP_PROJECT_ID`     | the project ID                  |
+| `GCP_PROJECT_NUMBER` | the project number              |
+| `GCP_REGION`         | the region (default `us-west1`) |
+| `TF_STATE_BUCKET`    | `<project-id>-tfstate`          |
+
+The workflows derive everything else: the provider
+`projects/<number>/locations/global/workloadIdentityPools/github/providers/github` and the identities
+`tf-plan@`, `tf-apply@` and `deploy@<project-id>.iam.gserviceaccount.com`. A job fails early with a message
+if a variable is unset.
+
+### Operator order
+
+1. Create the project, link billing, run `scripts/bootstrap.sh` ([`scripts/README.md`](scripts/README.md)).
+2. Set the four repository variables it prints.
+3. Run the first `terraform apply` locally ([`infra/README.md`](infra/README.md)). CI cannot do this one: it
+   creates the Cloud Run service and the deploy identity that the pipelines need. A deploy never creates the
+   service and fails with a message if it is missing.
+4. Add the three feed-URL secret versions.
+5. Merge to `main`: CI runs, then Deploy builds, pushes and rolls out the image.
+
+### Rollback
+
+Actions > Deploy > **Run workflow**, branch `main`, input `sha` = the full 40-character SHA of a commit on
+`main`. The run checks the SHA is on `main`, reuses the image tagged with it if Artifact Registry still has it
+(the registry keeps the 10 most recent versions and anything younger than 7 days), and otherwise rebuilds that
+commit, smoke tests the image and pushes it before deploying. It fails with a clear message if the SHA is
+unknown, not on `main`, or has no `Dockerfile`. A rollback does not wait for CI: it must work while `main` is
+broken. The next app change pushed to `main` deploys on top of the rollback, so revert the bad commit too.
+The same manual run with the current `main` SHA is how to exercise `deploy.yml` after editing it (changes under
+`.github/` do not deploy by themselves, because a deploy replaces the running instance).
+
+### Branch protection (recommended)
+
+On `main`: require a pull request and the CI checks (`Lint, types, tests, build`, `Bootstrap and smoke-script tests`,
+`Workflow lint and security invariants`, `Terraform fmt and validate`, `Container image (build only)`), forbid force
+pushes and deletion, and restrict who can push. Do not require the Infrastructure checks: they run only when
+`infra/` changes. Never add a `pull_request_target` trigger or a deploy path that is not `deploy.yml` on `main`.
+
+### Security model and residual risks
+
+- A same-repository pull request runs its own copy of the workflow files, so the author controls them. The
+  identities are therefore bound to the workflow file and the ref (`infra.yml:pr` for `tf-plan`,
+  `infra.yml:refs/heads/main` for `tf-apply`, `deploy.yml:refs/heads/main` for `deploy`), and `tf-plan` is
+  read-only. A pull request can never obtain deploy or apply credentials. Fork pull requests get no OIDC token
+  and skip the plan.
+- `scripts/test/workflow-invariants.py` (a CI job) fails if a workflow could reach the wrong identity: it checks
+  who may request `id-token: write`, which job authenticates as which service account, that nothing uses
+  `pull_request_target` or the `secrets` context, that no `run:` block interpolates event data, that the strings
+  equal the bootstrap contract in `scripts/lib.sh` and `infra/`, and that `gcloud run deploy` carries only the
+  image. `--self-test` breaks each invariant once and requires a failure.
+- Pull-request plans run with `-lock=false` so a pull request cannot hold the state lock and block an apply.
+  `tf-plan` may still write lock objects, so a malicious workflow could leave a lock behind. Recover with
+  `terraform -chdir=infra force-unlock <lock-id>` (the ID is in the blocked run's error).
+- Third-party actions are pinned by major version tag (not by commit SHA), refreshed weekly by Dependabot
+  ([`.github/dependabot.yml`](.github/dependabot.yml): actions, the Dockerfile base image, npm, Terraform). A
+  compromised tag would run with the job's permissions, which is why only `deploy.yml` and the two Terraform jobs
+  hold `id-token: write`. The `pip install` pins in `ci.yml` are updated by hand.
+- The Terraform plan comment is visible to anyone who can see the pull request. It shows resource attributes
+  such as the project ID, which are not secrets; secret values never enter Terraform.
+- Deploys are serialized and never cancelled, but GitHub keeps one waiting run per group, so a waiting run is
+  replaced by a newer one. A deploy for a commit older than the one already live stands down, so a slow or
+  re-run older run cannot roll the app back.
