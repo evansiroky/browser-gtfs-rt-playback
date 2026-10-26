@@ -40,7 +40,7 @@ variable "container_image" {
 # ---- Cost guards ----
 
 variable "billing_account" {
-  description = "Billing account ID (XXXXXX-XXXXXX-XXXXXX) the budget is created on. Empty skips the budget."
+  description = "Billing account ID (XXXXXX-XXXXXX-XXXXXX) for the budget. Empty (the default) uses the account the project is linked to; set it only to override that."
   type        = string
   default     = ""
 
@@ -51,7 +51,7 @@ variable "billing_account" {
 }
 
 variable "manage_budget" {
-  description = "Set false to leave the billing budget out (for example when the operator cannot grant the billing roles)."
+  description = "Set false to leave the billing budget out (for example when the operator cannot grant the billing roles). With true, the plan fails if no billing account can be found."
   type        = bool
   default     = true
 }
@@ -62,8 +62,8 @@ variable "budget_amount" {
   default     = 25
 
   validation {
-    condition     = var.budget_amount > 0 && var.budget_amount == floor(var.budget_amount)
-    error_message = "budget_amount must be a positive whole number of US dollars."
+    condition     = var.budget_amount >= 1 && var.budget_amount <= 1000000000 && var.budget_amount == floor(var.budget_amount)
+    error_message = "budget_amount must be a whole number of US dollars from 1 to 1000000000."
   }
 }
 
@@ -73,8 +73,8 @@ variable "registry_keep_count" {
   default     = 10
 
   validation {
-    condition     = var.registry_keep_count >= 1 && var.registry_keep_count == floor(var.registry_keep_count)
-    error_message = "registry_keep_count must be a positive whole number."
+    condition     = var.registry_keep_count >= 1 && var.registry_keep_count <= 1000 && var.registry_keep_count == floor(var.registry_keep_count)
+    error_message = "registry_keep_count must be a whole number from 1 to 1000."
   }
 }
 
@@ -97,7 +97,8 @@ variable "trip_updates_enabled" {
 # ---- Tunables ----
 # Each default below must equal the server's default (server/README.md, specs/behaviors/configuration.md);
 # the server is the source of truth, and it refuses to start on a value it cannot use.
-# Durations are milliseconds (1000..2147483647), sizes are bytes.
+# Durations are milliseconds (1000..2147483647), sizes are bytes. Integer limits repeat the server's rules
+# (server/src/config.ts: whole numbers up to Number.MAX_SAFE_INTEGER), so a value it would refuse fails at plan time.
 
 variable "poll_interval_ms" {
   description = "Realtime poll interval (POLL_INTERVAL_MS)."
@@ -127,8 +128,8 @@ variable "rt_max_bytes" {
   default     = 26214400
 
   validation {
-    condition     = var.rt_max_bytes > 0 && var.rt_max_bytes == floor(var.rt_max_bytes)
-    error_message = "rt_max_bytes must be a positive whole number."
+    condition     = var.rt_max_bytes >= 1 && var.rt_max_bytes <= 9007199254740991 && var.rt_max_bytes == floor(var.rt_max_bytes)
+    error_message = "rt_max_bytes must be a whole number from 1 to 9007199254740991."
   }
 }
 
@@ -149,8 +150,8 @@ variable "schedule_max_bytes" {
   default     = 104857600
 
   validation {
-    condition     = var.schedule_max_bytes > 0 && var.schedule_max_bytes == floor(var.schedule_max_bytes)
-    error_message = "schedule_max_bytes must be a positive whole number."
+    condition     = var.schedule_max_bytes >= 1 && var.schedule_max_bytes <= 9007199254740991 && var.schedule_max_bytes == floor(var.schedule_max_bytes)
+    error_message = "schedule_max_bytes must be a whole number from 1 to 9007199254740991."
   }
 }
 
@@ -160,8 +161,8 @@ variable "schedule_memory_limit_bytes" {
   default     = 805306368
 
   validation {
-    condition     = var.schedule_memory_limit_bytes > 0 && var.schedule_memory_limit_bytes == floor(var.schedule_memory_limit_bytes)
-    error_message = "schedule_memory_limit_bytes must be a positive whole number."
+    condition     = var.schedule_memory_limit_bytes >= 1 && var.schedule_memory_limit_bytes <= 9007199254740991 && var.schedule_memory_limit_bytes == floor(var.schedule_memory_limit_bytes)
+    error_message = "schedule_memory_limit_bytes must be a whole number from 1 to 9007199254740991."
   }
 }
 
@@ -204,8 +205,8 @@ variable "history_memory_limit_bytes" {
   default     = 536870912
 
   validation {
-    condition     = var.history_memory_limit_bytes > 0 && var.history_memory_limit_bytes == floor(var.history_memory_limit_bytes)
-    error_message = "history_memory_limit_bytes must be a positive whole number."
+    condition     = var.history_memory_limit_bytes >= 1 && var.history_memory_limit_bytes <= 9007199254740991 && var.history_memory_limit_bytes == floor(var.history_memory_limit_bytes)
+    error_message = "history_memory_limit_bytes must be a whole number from 1 to 9007199254740991."
   }
 }
 
@@ -215,8 +216,8 @@ variable "rate_limit_per_min" {
   default     = 120
 
   validation {
-    condition     = var.rate_limit_per_min > 0 && var.rate_limit_per_min == floor(var.rate_limit_per_min)
-    error_message = "rate_limit_per_min must be a positive whole number."
+    condition     = var.rate_limit_per_min >= 1 && var.rate_limit_per_min <= 9007199254740991 && var.rate_limit_per_min == floor(var.rate_limit_per_min)
+    error_message = "rate_limit_per_min must be a whole number from 1 to 9007199254740991."
   }
 }
 
@@ -226,7 +227,7 @@ variable "tile_host" {
   default     = "https://tiles.openfreemap.org"
 
   validation {
-    condition     = can(regex("^https?://[^/?#@\\s]+$", var.tile_host))
-    error_message = "tile_host must be an http or https origin: no path, query or credentials."
+    condition     = can(regex("^https?://(\\*\\.)?[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*(:[0-9]{1,5})?/?$", var.tile_host))
+    error_message = "tile_host must be an http or https origin such as https://tiles.example.com: no path, query or credentials (a leading *. host wildcard is allowed)."
   }
 }
