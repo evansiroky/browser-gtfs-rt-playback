@@ -230,7 +230,8 @@ export interface TripFrequencyDetail {
   headwaySecs: number;
   windowStart: EpochSeconds;
   windowEnd: EpochSeconds;
-  templateDurationSecs: number;
+  /** Null when the trip has `unusable_stop_times`: no template exists. */
+  templateDurationSecs: number | null;
   activeNow: boolean;
   /** Nominal instances overlapping now; empty if misconfigured. */
   activeInstanceStarts: EpochSeconds[];

@@ -214,7 +214,7 @@ describe('trips.md: detail', () => {
       headwaySecs: number;
       windowStart: number;
       windowEnd: number;
-      templateDurationSecs: number;
+      templateDurationSecs: number | null;
       activeNow: boolean;
       activeInstanceStarts: number[];
     }>();
