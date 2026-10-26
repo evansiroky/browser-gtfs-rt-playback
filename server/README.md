@@ -100,17 +100,29 @@ and query values) before writing.
   `missing_file` (names the file), `bad_zip`, `bad_csv` (names the file), `invalid_schedule` (a
   required column or the agency timezone is missing or unusable) and `internal_error`.
 - **Schedule memory limit** is checked against a running estimate of the heap the load holds at its
-  peak: the retained rows, ids and polylines, the per-trip first/last stop-time scratch while
-  `stop_times.txt` streams, and the raw points of the shape being encoded (every shape of an
-  ungrouped `shapes.txt`). It is calibrated to sit above the measured heap (see the benchmark below).
-  The downloaded body itself is not counted: it is bounded by `SCHEDULE_MAX_BYTES` and dropped once
-  parsed.
+  peak. Everything kept is charged by the size of its text, however long: the rows of routes, trips and
+  frequencies, agency names, service ids, trip ids, polylines and shape ids, and the raw points of the
+  shape being encoded (every shape of an ungrouped `shapes.txt`). Values that are only parsed are kept
+  as numbers (stop times, calendar dates) and their text is dropped. It is calibrated to sit above the
+  measured heap (see the benchmark below). The downloaded body itself is not counted: it is bounded by
+  `SCHEDULE_MAX_BYTES` and dropped once parsed.
+- **Reading the archive is bounded too.** The download limit and timeout cover only the download, so
+  the inflated bytes of the files that are read may not exceed `DECOMPRESSION_FACTOR` (8) x
+  `SCHEDULE_MAX_BYTES` (`too_large`), and reading must finish within `PARSE_TIMEOUT_FACTOR` (4) x
+  `SCHEDULE_TIMEOUT_MS` (`timeout`, measured on the injected clock from the end of the download).
+  Both are checked on the inflated stream itself, so a file of blank lines or a zip bomb stops at the
+  limit, and a `discard()` stops a parse at once, not at the next row. The factors are constants in
+  `src/schedule/loader.ts`, not settings. An archive with more than 10 000 entries is `bad_zip`; only the
+  eight GTFS files are indexed.
 - **Unreadable cells are not repaired.** A `shapes.txt` point whose latitude or longitude is not a
   number in range, or whose `shape_pt_sequence` is not a number, is skipped; a shape without a valid
-  point has no polyline. A `stop_times.txt` row without a numeric `stop_sequence`, and rows of
-  trips absent from `trips.txt`, are skipped; `frequencies.txt` rows of unknown trips are dropped.
-  A time that is not `H:MM:SS` counts as missing. For a repeated `route_id` or `trip_id` the first
-  row wins; for a service date both added and removed by `calendar_dates.txt` the addition wins.
+  point has no polyline. A `stop_times.txt` row whose `stop_sequence` is not plain digits (`0x10`, `1e1`,
+  `-1` are not), and rows of trips absent from `trips.txt`, are skipped; `frequencies.txt` rows of
+  unknown trips are dropped. A time that is not `H:MM:SS` (minutes and seconds 00-59) counts as missing.
+  A `calendar.txt` row whose `start_date` or `end_date` is not `YYYYMMDD` is ignored, as is a
+  `calendar_dates.txt` row whose date is not, or whose type is not 1 or 2. For a repeated `route_id` or
+  `trip_id` the first row wins; for a service date both added and removed by `calendar_dates.txt` the
+  addition wins.
 - **Realtime.** One poller per configured feed: a fetch at wake, then a fixed-cadence interval;
   a tick is skipped while the previous fetch is in flight. Redirects are followed manually (≤ 3,
   `http`/`https` only, and never away from the configured origin to an internal host:
@@ -161,7 +173,7 @@ interface ScheduleStore {
   trips(): IterableIterator<ScheduleTrip>; // { id, row, template, frequencies }, trips.txt order
   operatesOn(serviceId, serviceDate: 'YYYYMMDD'): boolean;
   shape(shapeId): string | null; // the precision-6 polyline, exactly as served
-  configurationErrors(): readonly { code: 'mixed_exact_times'; tripId: string }[];
+  configurationErrors(): readonly { code: ConfigurationErrorCode; tripId: string }[];
   counts(): { trips; routes; shapes; estimatedBytes };
 }
 ```
@@ -169,13 +181,17 @@ interface ScheduleStore {
 - **Templates.** `startSecs` is the departure (else arrival) of the stop with the lowest
   `stop_sequence`; `endSecs` the arrival (else departure) of the one with the highest, in seconds from
   the service day's "noon minus 12 h" (values above 86 400 are normal). `stop_times.txt` need not be
-  sorted. A trip whose first or last stop has no usable time (and a trip with no stop times at all) has
-  `template: null`; the specs do not define what such a trip is, so the consumer must decide.
+  sorted. A trip with no usable template (no stop times at all, or a first stop with neither departure
+  nor arrival, or a last stop with neither arrival nor departure, or only rows whose `stop_sequence`
+  is unusable) has `template: null` and is listed as an `unusable_stop_times` configuration error.
 - **`operatesOn`.** The weekday flag of `calendar.txt` within `start_date`..`end_date` inclusive, then
   `calendar_dates.txt`: type 1 adds a date, type 2 removes it. A service only in `calendar_dates.txt`
   operates exactly on its type 1 dates. Unknown services never operate.
-- **Configuration errors.** Computed once at load, in `trips.txt` order: the trip has more than one
-  `frequencies.txt` row and their `exact_times` (absent or empty counting as `0`) are not all equal.
+- **Configuration errors** (trip-activity.md "Schedule entries"). Computed once at load, in
+  `trips.txt` order: `mixed_exact_times` when the trip has more than one `frequencies.txt` row and their
+  `exact_times` (absent or empty counting as `0`) are not all equal; `unusable_stop_times` when its
+  `template` is null. A trip with both problems appears twice, `mixed_exact_times` first. They never
+  fail the load.
 - **Shapes** are held only as encoded strings. `shapes.txt` is encoded while it streams: a file
   grouped by `shape_id` holds one shape's raw points at a time; the first time a `shape_id` returns
   after other shapes' rows, the file is known to be ungrouped and is read again, buffering all shapes
