@@ -43,11 +43,16 @@ server handles `SIGTERM` itself. There is no `HEALTHCHECK` (Cloud Run ignores it
 port). The image holds no secrets and no `.env`; configuration is environment only.
 
 ```bash
-docker build -t gtfs-rt-debugger .
+docker build --platform linux/amd64 --build-arg GIT_SHA="$(git rev-parse HEAD)" -t gtfs-rt-debugger .
 ```
 
-Run it against the fake feeds (`fixtures`) on the host. The fake host listens on loopback by
-default, so pick one of two ways to let the container reach it:
+Cloud Run runs `linux/amd64` only and rejects an arm64 image, so build with `--platform linux/amd64`
+on an Apple-silicon or other arm64 machine (CI on an amd64 Ubuntu runner needs no flag). `GIT_SHA`
+is optional; it fills the `org.opencontainers.image.revision` label (default `unknown`).
+
+Run it against the fake feeds (`fixtures`) on the host. The fake host runs in the foreground, so
+start it in one terminal and `docker run` in a second. It listens on loopback by default, so pick
+one of two ways to let the container reach it:
 
 ```bash
 # Linux, simplest: share the host network (the app is then on http://localhost:8080)
@@ -77,7 +82,7 @@ hand.
 
 `scripts/container-smoke.sh <image> [--port N]` starts the image with placeholder feed URLs and
 checks serving, the `/trips/x` fallback, the API, non-root, `SIGTERM` exit 0 and a log free of feed
-URLs; see [`scripts/README.md`](scripts/README.md#container-smoke-test). `npm start` (repo root)
+URLs (default host port 18080, published on 127.0.0.1 only); see [`scripts/README.md`](scripts/README.md#container-smoke-test). `npm start` (repo root)
 runs the built server outside Docker (`npm run build` first).
 
 ## Development
