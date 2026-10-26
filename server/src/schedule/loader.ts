@@ -5,12 +5,22 @@ import type { Config } from '../config.js';
 import type { ScheduleProvider, ScheduleStatus } from '../session/schedule-provider.js';
 import { downloadSchedule } from './download.js';
 import { toStatusError } from './errors.js';
+import { LoadGuard } from './guard.js';
 import { MemoryBudget } from './memory.js';
 import { parseSchedule } from './parse.js';
 import type { ScheduleStore } from './store.js';
 
 /** feed-ingest.md "Schedule": one automatic retry follows a failed load after this long. */
 export const RETRY_DELAY_MS = 30_000;
+
+/**
+ * Reading the downloaded archive is bounded too (the download limit and timeout only cover the
+ * download): it may inflate to this many times `SCHEDULE_MAX_BYTES`, else `too_large`.
+ */
+export const DECOMPRESSION_FACTOR = 8;
+
+/** Reading the archive must finish within this many times `SCHEDULE_TIMEOUT_MS`, else `timeout`. */
+export const PARSE_TIMEOUT_FACTOR = 4;
 
 /** Downloads and reduces the schedule; replaceable in tests. Must stop working once `signal` aborts. */
 export type LoadSchedule = (signal: AbortSignal) => Promise<ScheduleStore>;
@@ -67,7 +77,13 @@ export class ScheduleLoader implements ScheduleProvider {
           maxBytes: config.scheduleMaxBytes,
           signal,
         });
-        return parseSchedule(body, new MemoryBudget(config.scheduleMemoryLimitBytes), signal);
+        const guard = new LoadGuard({
+          signal,
+          maxDecompressedBytes: DECOMPRESSION_FACTOR * config.scheduleMaxBytes,
+          deadlineAt: clock.now() + PARSE_TIMEOUT_FACTOR * config.scheduleTimeoutMs,
+          now: () => clock.now(),
+        });
+        return parseSchedule(body, new MemoryBudget(config.scheduleMemoryLimitBytes), guard);
       });
   }
 

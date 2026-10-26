@@ -1,6 +1,6 @@
 import { encodePolyline6 } from '@gtfs-rt-debugger/shared';
 import { describe, expect, it } from 'vitest';
-import { MemoryBudget } from './memory.js';
+import { MemoryBudget, stringBytes } from './memory.js';
 import { encodeShapes } from './shapes.js';
 import type { Row } from './store.js';
 
@@ -146,5 +146,25 @@ describe('encodeShapes', () => {
     );
     // After encoding, only the polylines are charged; the raw points are gone.
     expect(roomy.used).toBeLessThan(100_000);
+  });
+
+  it('charges only the final shapes after an ungrouped file forces a second read', async () => {
+    // A, B and C are flushed by the grouped pass before A returns and shows the file ungrouped.
+    const { open, stats } = source([
+      'A,1,1,1',
+      'B,2,2,1',
+      'C,3,3,1',
+      'A,1.5,1.5,2',
+      'B,2.5,2.5,2',
+      'C,3.5,3.5,2',
+    ]);
+    const used = new MemoryBudget(1 << 30);
+    const shapes = await encodeShapes(open, used);
+    expect(stats.opens).toBe(2);
+    const final = [...shapes].reduce(
+      (sum, [id, polyline]) => sum + stringBytes(id) + stringBytes(polyline) + 32,
+      0,
+    );
+    expect(used.used).toBe(final);
   });
 });

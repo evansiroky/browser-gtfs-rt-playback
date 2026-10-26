@@ -8,7 +8,12 @@ import type { Env } from '../config.js';
 import { startFeedHost, testConfig, type FeedHost } from '../test-support/feeds.js';
 import { captureLogger } from '../test-support/logger.js';
 import { miniSchedule, zipOf } from '../test-support/zip.js';
-import { RETRY_DELAY_MS, ScheduleLoader, type LoadSchedule } from './loader.js';
+import {
+  DECOMPRESSION_FACTOR,
+  RETRY_DELAY_MS,
+  ScheduleLoader,
+  type LoadSchedule,
+} from './loader.js';
 import type { ScheduleStore } from './store.js';
 
 v8.setFlagsFromString('--expose-gc');
@@ -190,6 +195,25 @@ describe('failures', () => {
     // And accepts one of exactly the limit.
     loader.discard();
     loader = makeLoader({ SCHEDULE_MAX_BYTES: String(fixtureZip.byteLength) });
+    loader.start();
+    await untilState('ready');
+  });
+
+  it('fails with too_large when the archive inflates past the multiple of the download limit', async () => {
+    const trips = 'route_id,service_id,trip_id\n' + 'R1,WK,T1\n'.repeat(400_000); // 3.6 MB of text
+    const zip = zipOf(miniSchedule({ 'trips.txt': trips }));
+    expect(zip.byteLength * DECOMPRESSION_FACTOR).toBeLessThan(3_600_000);
+    host.route('/schedule.zip', (_req, res) => serveZip(zip)(res));
+    loader = makeLoader({ SCHEDULE_MAX_BYTES: String(zip.byteLength) });
+    loader.start();
+    await untilState('failed');
+    expect(loader.status().error).toMatchObject({ code: 'too_large' });
+    expect(loader.status().error?.message).not.toMatch(/https?:|\.zip|127\.0/);
+    // The same archive loads when the limit leaves room to inflate it.
+    loader.discard();
+    loader = makeLoader({
+      SCHEDULE_MAX_BYTES: String(Math.ceil(3_700_000 / DECOMPRESSION_FACTOR)),
+    });
     loader.start();
     await untilState('ready');
   });

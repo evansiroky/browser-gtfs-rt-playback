@@ -3,6 +3,8 @@ import yauzl from 'yauzl';
 import type { ChunkedBody } from './download.js';
 import { ScheduleLoadError } from './errors.js';
 
+/** An archive with more entries than this is not a GTFS feed. */
+const MAX_ENTRIES = 10_000;
 const BAD_ZIP = 'The schedule is not a readable zip archive.';
 
 /** Lets yauzl read ranges of a chunked body, so the archive is never copied into one buffer. */
@@ -43,11 +45,19 @@ function open(body: ChunkedBody): Promise<yauzl.ZipFile> {
   });
 }
 
-function readEntries(zipfile: yauzl.ZipFile): Promise<Map<string, yauzl.Entry>> {
+/** Walks the central directory, keeping only the entries named in `wanted` (the first of a name). */
+function readEntries(
+  zipfile: yauzl.ZipFile,
+  wanted: ReadonlySet<string>,
+): Promise<Map<string, yauzl.Entry>> {
   return new Promise((resolve, reject) => {
     const entries = new Map<string, yauzl.Entry>();
+    if (zipfile.entryCount > MAX_ENTRIES) {
+      reject(new ScheduleLoadError('bad_zip', BAD_ZIP));
+      return;
+    }
     zipfile.on('entry', (entry: yauzl.Entry) => {
-      if (!entry.fileName.endsWith('/') && !entries.has(entry.fileName)) {
+      if (wanted.has(entry.fileName) && !entries.has(entry.fileName)) {
         entries.set(entry.fileName, entry);
       }
       zipfile.readEntry();
@@ -68,11 +78,14 @@ export class ZipArchive {
     this.#entries = entries;
   }
 
-  /** Throws `bad_zip` for anything that is not a readable archive. */
-  static async open(body: ChunkedBody): Promise<ZipArchive> {
+  /**
+   * Throws `bad_zip` for anything that is not a readable archive, or has more than
+   * {@link MAX_ENTRIES} entries. Only the top-level files named in `wanted` are indexed.
+   */
+  static async open(body: ChunkedBody, wanted: ReadonlySet<string>): Promise<ZipArchive> {
     const zipfile = await open(body);
     try {
-      return new ZipArchive(zipfile, await readEntries(zipfile));
+      return new ZipArchive(zipfile, await readEntries(zipfile, wanted));
     } catch (error) {
       zipfile.close();
       throw error;

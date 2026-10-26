@@ -138,6 +138,7 @@ async function load(file) {
   const root = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist', 'schedule');
   const { parseSchedule } = await import(join(root, 'parse.js'));
   const { MemoryBudget } = await import(join(root, 'memory.js'));
+  const { LoadGuard } = await import(join(root, 'guard.js'));
   const chunks = [];
   let size = 0;
   for await (const chunk of createReadStream(file, { highWaterMark: 64 * 1024 })) {
@@ -160,7 +161,11 @@ async function load(file) {
   }, 50);
   const started = performance.now();
   const budget = new MemoryBudget(limit);
-  const store = await parseSchedule({ chunks, size }, budget, new AbortController().signal);
+  const store = await parseSchedule(
+    { chunks, size },
+    budget,
+    LoadGuard.unlimited(new AbortController().signal),
+  );
   const seconds = (performance.now() - started) / 1000;
   clearInterval(sampler);
   chunks.length = 0;
@@ -222,6 +227,7 @@ if (mode === 'generate') {
     limit,
     '--file',
     file,
+    ...(ungrouped ? ['--ungrouped'] : []),
   ].map(String);
   console.error(
     `generating ${trips} trips x ${stops} stops, ${shapes} shapes x ${points} points ...`,

@@ -20,9 +20,10 @@ export interface ScheduleTrip {
   /** The whole `trips.txt` row. */
   readonly row: Row;
   /**
-   * Null when the trip has no usable template: no `stop_times.txt` rows, or its first stop has
-   * neither a departure nor an arrival time, or its last stop has neither an arrival nor a
-   * departure time (missing or malformed). The specs do not say what such a trip is.
+   * Null when the trip has no usable template: no `stop_times.txt` rows (with a numeric
+   * `stop_sequence`), or its first stop has neither a departure nor an arrival time, or its last
+   * stop has neither an arrival nor a departure time (missing or malformed). Such a trip is also
+   * listed in {@link ScheduleStore.configurationErrors} as `unusable_stop_times`.
    */
   readonly template: TripTemplate | null;
   /** The trip's `frequencies.txt` rows, whole, in file order; empty for a plain trip. */
@@ -63,7 +64,12 @@ export interface ScheduleStore {
   operatesOn(serviceId: string, serviceDate: string): boolean;
   /** The shape's precision-6 polyline, or null for an unknown shape. */
   shape(shapeId: string): string | null;
-  /** Trips whose `frequencies.txt` rows do not all share one `exact_times` (absent counts as 0). */
+  /**
+   * The configuration errors found at load, in `trips.txt` order (trip-activity.md): trips whose
+   * `frequencies.txt` rows do not all share one `exact_times` (absent counts as 0), as
+   * `mixed_exact_times`; and trips whose `template` is null, as `unusable_stop_times`. A trip with
+   * both is listed under both codes, `mixed_exact_times` first.
+   */
   configurationErrors(): readonly ScheduleConfigurationError[];
   counts(): ScheduleCounts;
 }

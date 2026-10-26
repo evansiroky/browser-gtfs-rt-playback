@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { readCsv } from './csv.js';
+import { LoadGuard } from './guard.js';
 import { ScheduleLoadError } from './errors.js';
 import { ZipArchive } from './zip.js';
 import { chunked, zipOf } from '../test-support/zip.js';
 
-const signal = new AbortController().signal;
+const guard = LoadGuard.unlimited(new AbortController().signal);
+const FILES = new Set(['f.txt']);
 
 async function rows(content: string | Uint8Array, required: string[] = []) {
-  const archive = await ZipArchive.open(chunked(zipOf({ 'f.txt': content }), 64));
+  const archive = await ZipArchive.open(chunked(zipOf({ 'f.txt': content }), 64), FILES);
   try {
     const out = [];
-    for await (const row of readCsv(archive, 'f.txt', required, signal)) out.push(row);
+    for await (const row of readCsv(archive, 'f.txt', required, guard)) out.push(row);
     return out;
   } finally {
     archive.close();
@@ -88,10 +90,20 @@ describe('readCsv', () => {
 
   it('stops once the signal aborts', async () => {
     const controller = new AbortController();
-    const archive = await ZipArchive.open(chunked(zipOf({ 'f.txt': 'a\n1\n2\n3\n' })));
+    const archive = await ZipArchive.open(chunked(zipOf({ 'f.txt': 'a\n1\n2\n3\n' })), FILES);
     const seen: string[] = [];
     const run = async () => {
-      for await (const row of readCsv(archive, 'f.txt', [], controller.signal)) {
+      for await (const row of readCsv(
+        archive,
+        'f.txt',
+        [],
+        new LoadGuard({
+          signal: controller.signal,
+          maxDecompressedBytes: Infinity,
+          deadlineAt: Infinity,
+          now: () => 0,
+        }),
+      )) {
         seen.push(row['a']!);
         controller.abort();
       }

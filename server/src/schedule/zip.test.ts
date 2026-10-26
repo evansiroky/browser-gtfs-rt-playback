@@ -1,11 +1,12 @@
 import { Zip, ZipDeflate, ZipPassThrough, strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { chunked, miniSchedule, zipOf } from '../test-support/zip.js';
+import { LoadGuard } from './guard.js';
 import { MemoryBudget } from './memory.js';
 import { parseSchedule } from './parse.js';
 import { ZipArchive } from './zip.js';
 
-const signal = new AbortController().signal;
+const guard = LoadGuard.unlimited(new AbortController().signal);
 
 async function text(archive: ZipArchive, name: string): Promise<string> {
   const chunks: Buffer[] = [];
@@ -33,7 +34,7 @@ describe('ZipArchive', () => {
   it('reads entries whatever the chunking of the body, down to single bytes', async () => {
     const bytes = zipOf({ 'a.txt': 'hello '.repeat(100), 'b.txt': 'world' });
     for (const size of [1, 7, 64, bytes.byteLength]) {
-      const archive = await ZipArchive.open(chunked(bytes, size));
+      const archive = await ZipArchive.open(chunked(bytes, size), new Set(['a.txt', 'b.txt']));
       expect(await text(archive, 'a.txt'), `chunks of ${size}`).toBe('hello '.repeat(100));
       expect(await text(archive, 'b.txt')).toBe('world');
       archive.close();
@@ -48,22 +49,24 @@ describe('ZipArchive', () => {
     const store = await parseSchedule(
       chunked(streamingZip(files, stored), 4096),
       new MemoryBudget(1 << 30),
-      signal,
+      guard,
     );
     expect(store.counts()).toMatchObject({ trips: 1, routes: 1, shapes: 1 });
     expect(store.template('T1')).toEqual({ startSecs: 28_800, endSecs: 30_600 });
   });
 
-  it('knows which top-level files exist, and ignores folders', async () => {
+  it('indexes only the wanted top-level files, never folders or their content', async () => {
     const bytes = zipSync({
       'a.txt': strToU8('x'),
       'dir/': new Uint8Array(0),
       'dir/b.txt': strToU8('y'),
     });
-    const archive = await ZipArchive.open(chunked(bytes));
+    const archive = await ZipArchive.open(chunked(bytes), new Set(['a.txt', 'b.txt']));
     expect(archive.has('a.txt')).toBe(true);
     expect(archive.has('dir/')).toBe(false);
     expect(archive.has('b.txt')).toBe(false);
+    expect(archive.has('dir/b.txt')).toBe(false);
+    expect(archive.has('junk.bin')).toBe(false);
     archive.close();
   });
 
@@ -72,7 +75,7 @@ describe('ZipArchive', () => {
       Object.entries(miniSchedule()).map(([name, content]) => [`feed/${name}`, content]),
     );
     await expect(
-      parseSchedule(chunked(zipOf(nested)), new MemoryBudget(1 << 30), signal),
+      parseSchedule(chunked(zipOf(nested)), new MemoryBudget(1 << 30), guard),
     ).rejects.toMatchObject({ code: 'missing_file' });
   });
 });
