@@ -166,8 +166,11 @@ plus `template[0].revision`, `template[0].containers[0].name` and `template[0].e
 Without the label and annotation entries the first plan after a deploy would try to remove the
 nonce label, which creates a new revision and restarts the in-memory session. Everything
 Terraform does set (scaling, resources, environment variables, secrets, service account) stays
-managed, and `--image` never touches it, so a deploy changes no infrastructure settings and an
-apply never rolls the app back. The deploy workflow must not pass `--update-labels`,
+managed, and `--image` never touches it, so a deploy changes no infrastructure settings. An
+apply does not roll the app back because `ignore_changes` leaves the image alone when planning; a
+deploy that lands between an apply's plan and its write is a race that `ignore_changes` cannot
+cover (the provider sends the whole template), and it is made safe by the apply job's image checks
+(see `.github/workflows/infra.yml`). The deploy workflow must not pass `--update-labels`,
 `--update-env-vars` or similar flags for the same reason. The server-side additions are
 simulated in the mock, not verified against a live deployment.
 
