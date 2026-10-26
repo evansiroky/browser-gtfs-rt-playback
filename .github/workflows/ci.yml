@@ -1,0 +1,129 @@
+# CI: runs on every pull request and every push to main (specs/deployment.md "CI"), and is called
+# by deploy.yml so a deploy only follows a green run of exactly these jobs.
+#
+# Security: no cloud credentials and no `id-token` anywhere in this file; every job is read-only.
+# The terraform job validates against the public provider registry without a backend, and the image
+# job builds locally and never pushes. That is what makes it safe to run on any pull request.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Superseded pull-request runs are cancelled. Runs on main (and the call from deploy.yml, whose
+# group key is its own run id) are never cancelled.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Lint, types, tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # major-version pin, kept current by .github/dependabot.yml
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run format:check
+      # Production dependencies only: a devDependency advisory never blocks a deploy. High and
+      # critical advisories fail the run; lower severities are left to dependabot.
+      - run: npm audit --omit=dev --audit-level=high
+
+  scripts:
+    name: Bootstrap and smoke-script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: pip install shellcheck-py==0.11.0.1
+      - name: shellcheck
+        run: shellcheck scripts/*.sh scripts/test/*.sh scripts/test/fake-bin/* scripts/test/fake-tf/terraform
+      - name: Bootstrap and teardown against a fake gcloud
+        run: scripts/test/run-tests.sh
+      # The smoke script's own tests drive the built server through a fake docker.
+      - run: npm ci
+      - run: npm run build
+      - name: Smoke script tests
+        run: scripts/test/container-smoke-tests.sh
+
+  workflows:
+    name: Workflow lint and security invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install actionlint, shellcheck and PyYAML
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install actionlint-py==1.7.12.25 shellcheck-py==0.11.0.1 pyyaml==6.0.3
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: actionlint (runs shellcheck over every run block)
+        run: actionlint -color
+      - name: Security invariants of the workflows
+        run: |
+          python -I scripts/test/workflow-invariants.py --self-test
+          python -I scripts/test/workflow-invariants.py
+
+  terraform:
+    name: Terraform fmt and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.7 # infra/ needs >= 1.11; this is the version it was validated with
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff infra
+      # No backend and no credentials: validate needs only the provider schema from the registry.
+      - run: terraform -chdir=infra init -backend=false -input=false
+      - run: terraform -chdir=infra validate
+
+  image:
+    name: Container image (build only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      # Cloud Run runs linux/amd64 only. Built into the local daemon and never pushed.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: gtfs-rt-debugger:ci
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+      - name: Smoke test the image
+        run: scripts/container-smoke.sh gtfs-rt-debugger:ci
