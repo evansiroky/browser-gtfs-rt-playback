@@ -39,7 +39,7 @@ trips: [{
     hasVehiclePosition: boolean
     hasTripUpdate:      boolean
     startTime:       string | null                   // the reference's start_time, as sent
-    lastSeenAt:      epoch seconds | null            // newest vehicle timestamp (0 counts as none), else feed timestamp
+    lastSeenAt:      epoch seconds | null            // newest vehicle timestamp (0 counts as none), else the header timestamp of the feed of the first reference (vehicle positions first)
   } | null
   reason: "unknown_trip" | "configuration_error" | "not_in_service" | "missing_start_time"
         | "unmatched_start_time" | "outside_scheduled_time" | null   // list 3 only
