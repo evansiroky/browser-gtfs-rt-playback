@@ -50,9 +50,9 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
     expect(expected.stats).toEqual({
       tripsToday: 46,
       tripsActiveNow: 15,
-      vehicles: 30,
-      vehiclesWithTripId: 28,
-      tripUpdates: 6,
+      vehicles: 35,
+      vehiclesWithTripId: 33,
+      tripUpdates: 8,
       activeTripsWithRealtime: 8,
     });
   });
@@ -84,8 +84,14 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
 
   it('list 3: unscheduled with realtime, by reason then trip id then start', () => {
     expect(expected.lists.unscheduledWithRealtime.map(unscheduled)).toEqual([
+      'unknown_trip ghost-known-route-tu-trip 20261014 span=null --/TU',
+      'unknown_trip ghost-known-route-vp-trip 20261014 span=null VP/--',
       'unknown_trip ghost-tu-trip 20261014 span=null --/TU',
       'unknown_trip ghost-vp-trip 20261014 start=12:02:00 span=null VP/--',
+      'configuration_error cfg-freq-first-stop-untimed 20261014 start=12:00:00 span=null VP/--',
+      'configuration_error cfg-last-stop-untimed 20261014 span=null VP/TU',
+      'configuration_error cfg-mixed-and-no-stop-times 20261014 span=null VP/--',
+      'configuration_error cfg-no-stop-times 20261014 span=null VP/--',
       'configuration_error freq-mixed 20261014 start=12:07:00 span=null VP/--',
       'configuration_error freq-mixed-removed-today 20261014 span=null VP/--',
       'not_in_service freq-nis 20261014 VP/--',
@@ -110,9 +116,15 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
   });
 
   it('configuration errors', () => {
+    // trips.txt order; a trip with both problems is listed under both codes, mixed first
     expect(expected.configurationErrors).toEqual([
       { code: 'mixed_exact_times', tripId: 'freq-mixed' },
       { code: 'mixed_exact_times', tripId: 'freq-mixed-removed-today' },
+      { code: 'unusable_stop_times', tripId: 'cfg-no-stop-times' },
+      { code: 'unusable_stop_times', tripId: 'cfg-last-stop-untimed' },
+      { code: 'unusable_stop_times', tripId: 'cfg-freq-first-stop-untimed' },
+      { code: 'mixed_exact_times', tripId: 'cfg-mixed-and-no-stop-times' },
+      { code: 'unusable_stop_times', tripId: 'cfg-mixed-and-no-stop-times' },
     ]);
   });
 
@@ -145,6 +157,50 @@ describe('scenario at 2026-10-14 12:07:42 (midday)', () => {
       windowStart: Date.parse('2026-10-14T18:57:00Z') / 1000,
       windowEnd: Date.parse('2026-10-14T19:47:00Z') / 1000,
     });
+  });
+
+  it('looks the route of an unknown trip up in routes.txt, and leaves the names null when the route is unknown', () => {
+    const names = (id: string) => {
+      const r = expected.lists.unscheduledWithRealtime.find((x) => x.tripId === id)!;
+      return [r.reason, r.routeId, r.routeShortName, r.routeLongName, r.headsign];
+    };
+    // R2 and R3 are in routes.txt; R-GHOST is not; a reference without a route has none
+    expect(names('ghost-known-route-vp-trip')).toEqual([
+      'unknown_trip',
+      'R2',
+      '14',
+      'Mission',
+      null,
+    ]);
+    expect(names('ghost-known-route-tu-trip')).toEqual([
+      'unknown_trip',
+      'R3',
+      'NX',
+      'Embarcadero "Night" Express',
+      null,
+    ]);
+    expect(names('ghost-vp-trip')).toEqual(['unknown_trip', 'R-GHOST', null, null, null]);
+    expect(names('ghost-tu-trip')).toEqual(['unknown_trip', null, null, null, null]);
+  });
+
+  it('gives the trips without usable stop times no entries and the reason configuration_error', () => {
+    const cfg = expected.lists.unscheduledWithRealtime.filter((r) => r.tripId.startsWith('cfg-'));
+    expect(cfg.map((r) => [r.tripId, r.reason, r.frequency, r.scheduledSpan])).toEqual([
+      // its reference names 12:00:00, in the window of its only row: still no frequency
+      ['cfg-freq-first-stop-untimed', 'configuration_error', null, null],
+      ['cfg-last-stop-untimed', 'configuration_error', null, null],
+      ['cfg-mixed-and-no-stop-times', 'configuration_error', null, null],
+      ['cfg-no-stop-times', 'configuration_error', null, null],
+    ]);
+    const listed = [
+      ...expected.lists.activeWithRealtime,
+      ...expected.lists.activeWithoutRealtime,
+    ].map((r) => r.tripId);
+    expect(listed.filter((id) => id.startsWith('cfg-'))).toEqual([]);
+    // each of them would otherwise be active or scheduled today, so the counts leave them out
+    expect(expected.stats.tripsToday).toBe(
+      at('20261014', '12:07:42', { includeMisconfiguredTrip: false }).expected.stats.tripsToday,
+    );
   });
 
   it('pins what the spec says is null: unknown trips and configuration errors', () => {
@@ -218,9 +274,9 @@ describe('scenario at 2026-10-14 00:20:00 (after midnight)', () => {
     expect(expected.stats).toEqual({
       tripsToday: 41,
       tripsActiveNow: 20,
-      vehicles: 29,
-      vehiclesWithTripId: 27,
-      tripUpdates: 5,
+      vehicles: 34,
+      vehiclesWithTripId: 32,
+      tripUpdates: 7,
       activeTripsWithRealtime: 11,
     });
   });
@@ -256,8 +312,14 @@ describe('scenario at 2026-10-14 00:20:00 (after midnight)', () => {
 
   it('list 3 loses the overnight and past trips, and keeps the day-named references', () => {
     expect(expected.lists.unscheduledWithRealtime.map(unscheduled)).toEqual([
+      'unknown_trip ghost-known-route-tu-trip 20261014 span=null --/TU',
+      'unknown_trip ghost-known-route-vp-trip 20261014 span=null VP/--',
       'unknown_trip ghost-tu-trip 20261014 span=null --/TU',
       'unknown_trip ghost-vp-trip 20261014 start=00:15:00 span=null VP/--',
+      'configuration_error cfg-freq-first-stop-untimed 20261014 start=00:20:00 span=null VP/--',
+      'configuration_error cfg-last-stop-untimed 20261014 span=null VP/TU',
+      'configuration_error cfg-mixed-and-no-stop-times 20261014 span=null VP/--',
+      'configuration_error cfg-no-stop-times 20261014 span=null VP/--',
       'configuration_error freq-mixed 20261014 start=00:30:00 span=null VP/--',
       'configuration_error freq-mixed-removed-today 20261014 span=null VP/--',
       'not_in_service freq-nis 20261014 VP/--',
@@ -341,13 +403,14 @@ describe('options', () => {
     const full = at('20261014', '12:07:42');
     const without = at('20261014', '12:07:42', { includeMisconfiguredTrip: false });
     expect(without.expected.configurationErrors).toEqual([]);
-    expect(without.expected.stats.vehicles).toBe(full.expected.stats.vehicles - 2);
+    expect(without.expected.stats.vehicles).toBe(full.expected.stats.vehicles - 6);
     expect(without.expected.lists.unscheduledWithRealtime.map((r) => r.reason)).not.toContain(
       'configuration_error',
     );
     const ids = without.schedule.trips.map((t) => t.row.trip_id);
-    expect(ids).not.toContain('freq-mixed');
-    expect(ids).not.toContain('freq-mixed-removed-today');
+    for (const id of ['freq-mixed', 'freq-mixed-removed-today', 'cfg-no-stop-times'])
+      expect(ids).not.toContain(id);
+    expect(ids.some((id) => id!.startsWith('cfg-'))).toBe(false);
     expect(without.expected.stats.tripsToday).toBe(full.expected.stats.tripsToday);
   });
 
@@ -401,9 +464,11 @@ function violation(now: Date): string | null {
         (t) =>
           t.frequencies.every((f) => parseHms(f.start_time!) < parseHms(f.end_time!)) &&
           t.stopTimes.every((st, i, all) => {
-            const time = st.departure ?? st.arrival!;
+            const time = st.departure ?? st.arrival;
             const previous = all[i - 1];
-            return i === 0 || time >= (previous?.departure ?? previous?.arrival ?? 0);
+            return (
+              time === null || i === 0 || time >= (previous?.departure ?? previous?.arrival ?? 0)
+            );
           }),
       ),
     ],

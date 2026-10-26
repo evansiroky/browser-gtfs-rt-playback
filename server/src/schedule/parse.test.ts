@@ -42,12 +42,14 @@ describe.each([
 
   it('keeps each trip first and last stop time as its template, including past 24:00', async () => {
     const { sc, store } = await parseFixture(chunkSize);
-    const { tripTimes } = sc.expected.schedule;
+    const { tripTimes, tripsWithoutTemplate } = sc.expected.schedule;
     for (const [tripId, times] of Object.entries(tripTimes)) {
       expect(store.template(tripId), tripId).toEqual(times);
     }
+    for (const tripId of tripsWithoutTemplate) expect(store.template(tripId), tripId).toBeNull();
+    expect(tripsWithoutTemplate.length).toBeGreaterThan(0);
     expect(Math.max(...Object.values(tripTimes).map((t) => t.endSecs))).toBeGreaterThan(86_400);
-    expect(store.counts().trips).toBe(Object.keys(tripTimes).length);
+    expect(store.counts().trips).toBe(Object.keys(tripTimes).length + tripsWithoutTemplate.length);
   });
 
   it('encodes every shape to the polyline the fixture expects, grouped or not', async () => {
@@ -77,7 +79,7 @@ describe.each([
     }
   });
 
-  it('lists the trips whose frequency rows mix exact_times', async () => {
+  it('lists the trips with mixed exact_times or unusable stop times, in trips.txt order', async () => {
     const { sc, store } = await parseFixture(chunkSize);
     expect(store.configurationErrors()).toEqual(sc.expected.configurationErrors);
     expect(store.configurationErrors().length).toBeGreaterThan(0);

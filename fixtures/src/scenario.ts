@@ -32,8 +32,9 @@ import { addDays, formatHms, instantSeconds, serviceDateOf, weekdayOf } from './
 
 export interface ScenarioOptions {
   /**
-   * Include `freq-mixed`, the frequency trip whose rows disagree on `exact_times`, and the vehicle
-   * that references it. Default true.
+   * Include the trips with a configuration error and the vehicles that reference them:
+   * `freq-mixed` and `freq-mixed-removed-today` (rows that disagree on `exact_times`) and the
+   * four `cfg-` trips without usable stop times. Default true.
    */
   includeMisconfiguredTrip?: boolean;
 }
@@ -46,8 +47,13 @@ export interface ExpectedSchedule {
   trips: Row[];
   /** Every `frequencies.txt` row, every column. */
   frequencies: Row[];
-  /** First and last stop time per trip, seconds from the service day start (templates for frequency trips). */
+  /**
+   * First and last stop time per trip, seconds from the service day start (templates for
+   * frequency trips). Trips without usable stop times are not in it; see `tripsWithoutTemplate`.
+   */
   tripTimes: Record<string, { startSecs: number; endSecs: number }>;
+  /** Trips with no stop times, or no time at their first or last stop, in `trips.txt` order. */
+  tripsWithoutTemplate: string[];
   /** The precision-6 polyline each shape must encode to, points taken in `shape_pt_sequence` order. */
   shapes: Record<string, string>;
   /** Trips whose `shape_id` is absent from `shapes.txt`. */
@@ -77,6 +83,17 @@ export interface Scenario {
    * depends only on `seconds`, not on earlier calls. `expected` describes `now` only.
    */
   advance(seconds: number): { now: Date; vehiclePositions: Uint8Array; tripUpdates: Uint8Array };
+}
+
+/** First departure (else arrival) and last arrival (else departure); null when either is missing. */
+function templateOf(trip: TripData): { startSecs: number; endSecs: number } | null {
+  const first = trip.stopTimes[0];
+  const last = trip.stopTimes[trip.stopTimes.length - 1];
+  const startSecs = first && (first.departure ?? first.arrival);
+  const endSecs = last && (last.arrival ?? last.departure);
+  return startSecs === undefined || startSecs === null || endSecs === undefined || endSecs === null
+    ? null
+    : { startSecs, endSecs };
 }
 
 type StopStyle = 'plain' | 'dwell' | 'arrival-only';
@@ -652,6 +669,69 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
     );
   }
 
+  // Stop times from which no span can be computed (`unusable_stop_times`): no rows at all, no
+  // time at the last stop, no time at the first stop of a frequency trip's template, and both
+  // errors at once. Each would be active now if the missing times were read as zero or ignored.
+  if (includeMisconfigured) {
+    const untimed = { arrival: null, departure: null };
+    const motion = { shape: 'shape-mission', start: s - 300, end: s + 900 };
+    addTrip('cfg-no-stop-times', {
+      service: 'DAILY',
+      route: 'R2',
+      shape: 'shape-mission',
+      headsign: 'Nowhere',
+      direction: 0,
+      times: [],
+    });
+    addVehicle({ tripId: 'cfg-no-stop-times', startDate: today }, motion);
+
+    const untimedEnd = stopTimes(0, 24 * 3600, 'plain');
+    untimedEnd[untimedEnd.length - 1] = { ...untimedEnd[untimedEnd.length - 1]!, ...untimed };
+    addTrip('cfg-last-stop-untimed', {
+      service: 'DAILY',
+      route: 'R1',
+      shape: 'shape-market',
+      headsign: 'Downtown, via Market',
+      direction: 0,
+      times: untimedEnd,
+    });
+    addVehicle({ tripId: 'cfg-last-stop-untimed' }, { ...motion, shape: 'shape-market' });
+    addUpdate({ tripId: 'cfg-last-stop-untimed' }, null, [4]);
+
+    const untimedStart = stopTimes(0, 1200, 'plain');
+    untimedStart[0] = { ...untimedStart[0]!, ...untimed };
+    addTrip('cfg-freq-first-stop-untimed', {
+      service: 'DAILY',
+      route: 'R3',
+      shape: 'shape-embarcadero',
+      headsign: 'Airport',
+      direction: 0,
+      times: untimedStart,
+      frequencies: [{ start: 0, end: 26 * 3600, headway: 600, exact: '0' }],
+    });
+    addVehicle(
+      { tripId: 'cfg-freq-first-stop-untimed', startTime: hms(Math.max(0, s - (s % 600))) },
+      { ...motion, shape: 'shape-embarcadero' },
+    );
+
+    addTrip('cfg-mixed-and-no-stop-times', {
+      service: 'DAILY',
+      route: 'R3',
+      shape: 'shape-embarcadero',
+      headsign: 'Airport',
+      direction: 0,
+      times: [],
+      frequencies: [
+        { start: 0, end: 12 * 3600, headway: 600, exact: '1' },
+        { start: 12 * 3600, end: 26 * 3600, headway: 600, exact: '' },
+      ],
+    });
+    addVehicle(
+      { tripId: 'cfg-mixed-and-no-stop-times', startDate: today },
+      { ...motion, shape: 'shape-embarcadero' },
+    );
+  }
+
   // ---- realtime that the schedule cannot explain -------------------------------------------
   addVehicle(
     {
@@ -663,6 +743,12 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
     { shape: 'shape-market', start: s - 300, end: s + 900 },
   );
   addUpdate({ tripId: 'ghost-tu-trip', startDate: today }, null, [2]);
+  // Unknown trips whose route_id is in routes.txt: the names come from that route row.
+  addVehicle(
+    { tripId: 'ghost-known-route-vp-trip', startDate: today, routeId: 'R2' },
+    { shape: 'shape-mission', start: s - 300, end: s + 900 },
+  );
+  addUpdate({ tripId: 'ghost-known-route-tu-trip', startDate: today, routeId: 'R3' }, null, [2]);
   addVehicle(null, { shape: 'shape-embarcadero', start: s - 600, end: s + 1200 });
   addVehicle(
     { tripId: '', routeId: 'R2' },
@@ -718,18 +804,12 @@ export function scenario(now: Date = new Date(), options: ScenarioOptions = {}):
     trips: trips.map((tr) => tr.row),
     frequencies: trips.flatMap((tr) => tr.frequencies),
     tripTimes: Object.fromEntries(
-      trips.map((tr) => {
-        const first = tr.stopTimes[0]!;
-        const last = tr.stopTimes[tr.stopTimes.length - 1]!;
-        return [
-          tr.row.trip_id!,
-          {
-            startSecs: (first.departure ?? first.arrival)!,
-            endSecs: (last.arrival ?? last.departure)!,
-          },
-        ];
+      trips.flatMap((tr) => {
+        const times = templateOf(tr);
+        return times ? [[tr.row.trip_id!, times]] : [];
       }),
     ),
+    tripsWithoutTemplate: trips.filter((tr) => !templateOf(tr)).map((tr) => tr.row.trip_id!),
     shapes: shapePolylines,
     tripsWithoutShape: trips
       .filter((tr) => !shapePoints.has(tr.row.shape_id!))

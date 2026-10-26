@@ -97,7 +97,7 @@ export interface ExpectedStats {
 }
 
 export interface ExpectedConfigurationError {
-  code: 'mixed_exact_times';
+  code: 'mixed_exact_times' | 'unusable_stop_times';
   tripId: string;
 }
 
@@ -145,10 +145,13 @@ interface TripInfo {
   trip: TripData;
   tripId: string;
   serviceId: string;
+  /** The span (plain) or template (frequency); NaN when `unusable`. */
   startSecs: number;
   endSecs: number;
   frequencyRows: FrequencyRow[];
   mixed: boolean;
+  /** No stop times, or no time at the first or at the last stop: no span can be computed. */
+  unusable: boolean;
 }
 
 interface Entry {
@@ -172,8 +175,8 @@ interface Reference {
 }
 
 function tripInfo(trip: TripData): TripInfo {
-  const first = trip.stopTimes[0]!;
-  const last = trip.stopTimes[trip.stopTimes.length - 1]!;
+  const first = trip.stopTimes[0];
+  const last = trip.stopTimes[trip.stopTimes.length - 1];
   const frequencyRows = trip.frequencies.map((f): FrequencyRow => {
     const exact = f.exact_times ?? '';
     return {
@@ -184,15 +187,19 @@ function tripInfo(trip: TripData): TripInfo {
       exactNormalized: exact === '' ? '0' : exact,
     };
   });
+  // start = first departure, else arrival; end = last arrival, else departure.
+  const startSecs = first && (first.departure ?? first.arrival);
+  const endSecs = last && (last.arrival ?? last.departure);
   return {
     trip,
     tripId: trip.row.trip_id!,
     serviceId: trip.row.service_id!,
-    // start = first departure, else arrival; end = last arrival, else departure.
-    startSecs: (first.departure ?? first.arrival)!,
-    endSecs: (last.arrival ?? last.departure)!,
+    startSecs: startSecs ?? NaN,
+    endSecs: endSecs ?? NaN,
     frequencyRows,
     mixed: new Set(frequencyRows.map((r) => r.exactNormalized)).size > 1,
+    unusable:
+      startSecs === undefined || startSecs === null || endSecs === undefined || endSecs === null,
   };
 }
 
@@ -230,6 +237,7 @@ export function evaluate(input: EvaluationInput): Expected {
   const entriesOn = (info: TripInfo, date: string): Entry[] => {
     if (!operatesOn(data, info.serviceId, date)) return [];
     const at = (secs: number): number => instantSeconds(date, secs);
+    if (info.unusable) return [];
     if (info.frequencyRows.length === 0) {
       return [
         {
@@ -241,7 +249,7 @@ export function evaluate(input: EvaluationInput): Expected {
         },
       ];
     }
-    if (info.mixed) return [];
+    if (info.mixed || info.unusable) return [];
     const duration = info.endSecs - info.startSecs;
     return info.frequencyRows.flatMap((row) => {
       const frequency: FrequencyInfo = {
@@ -329,15 +337,20 @@ export function evaluate(input: EvaluationInput): Expected {
   const matches = (e: Entry, r: Reference): boolean =>
     e.tripId === r.tripId && e.date === r.date && (e.frequency === null || e.start === r.start);
 
-  /** Route and headsign of a row; the route ID falls back to the reference's for an unknown trip. */
+  /**
+   * Route and headsign of a row. The route ID is the trip's, else (an unknown trip) the
+   * reference's; the names come from the `routes.txt` row of that route ID whichever trip it is
+   * for, and are null when the route ID is null or not in `routes.txt`.
+   */
   const routeFields = (
     tripId: string,
     referenceRouteId: string | null = null,
   ): Pick<RowBase, 'routeId' | 'routeShortName' | 'routeLongName' | 'headsign'> => {
     const row = trips.get(tripId)?.trip.row;
-    const route = row ? routes.get(row.route_id!) : undefined;
+    const routeId = row?.route_id ?? referenceRouteId;
+    const route = routeId === null ? undefined : routes.get(routeId);
     return {
-      routeId: row?.route_id ?? referenceRouteId,
+      routeId,
       routeShortName: route?.route_short_name ?? null,
       routeLongName: route?.route_long_name ?? null,
       headsign: row?.trip_headsign ?? null,
@@ -397,13 +410,13 @@ export function evaluate(input: EvaluationInput): Expected {
       const named = instances.find((e) => matches(e, ref));
       let reason: Reason;
       if (!info) reason = 'unknown_trip';
-      else if (info.mixed) reason = 'configuration_error';
+      else if (info.mixed || info.unusable) reason = 'configuration_error';
       else if (!operatesOn(data, info.serviceId, ref.date)) reason = 'not_in_service';
       else if (info.frequencyRows.length > 0 && ref.start === null) reason = 'missing_start_time';
       else if (info.frequencyRows.length > 0 && !named) reason = 'unmatched_start_time';
       else reason = 'outside_scheduled_time';
       const window =
-        info && !info.mixed && ref.start !== null
+        info && !info.mixed && !info.unusable && ref.start !== null
           ? info.frequencyRows
               .map((row) => ({
                 row,
@@ -459,10 +472,11 @@ export function evaluate(input: EvaluationInput): Expected {
       activeWithoutRealtime: activeRows.filter((r) => r.realtime === null),
       unscheduledWithRealtime: unscheduled.map(({ row }) => row),
     },
-    configurationErrors: [...trips.values()]
-      .filter((t) => t.mixed)
-      .map((t): ExpectedConfigurationError => ({ code: 'mixed_exact_times', tripId: t.tripId }))
-      .sort((a, b) => compare(a.tripId, b.tripId)),
+    // In trips.txt order; a trip with both problems is listed under both, mixed first.
+    configurationErrors: [...trips.values()].flatMap((t): ExpectedConfigurationError[] => [
+      ...(t.mixed ? [{ code: 'mixed_exact_times' as const, tripId: t.tripId }] : []),
+      ...(t.unusable ? [{ code: 'unusable_stop_times' as const, tripId: t.tripId }] : []),
+    ]),
   };
 }
 
