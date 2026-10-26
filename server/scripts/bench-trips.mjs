@@ -4,9 +4,10 @@
 //   npm run build -w server
 //   node server/scripts/bench-trips.mjs [--trips 100000] [--vehicles 5000] [--updates 3000]
 //        [--runs 30] [--zone America/Los_Angeles] [--now 2026-10-14T19:07:42Z]
+//        [--frequency 0.1] [--ghost 0.06]
 //
 // Builds the schedule store directly (no zip: loading is benchmarked by bench-schedule.mjs), with
-// the given number of trips (90% plain, 10% frequency trips of 1-3 rows, a few configuration
+// the given number of trips (by default 90% plain, 10% frequency trips of 1-3 rows, a few configuration
 // errors), a vehicle positions snapshot and a trip updates snapshot that reference active,
 // scheduled and unknown trips, and times the first call (which builds the schedule index) and
 // then `runs` calls of every list and of the dashboard on a fixed clock.
@@ -23,6 +24,8 @@ const tripCount = Number(option('trips', 100_000));
 const vehicleCount = Number(option('vehicles', 5_000));
 const updateCount = Number(option('updates', 3_000));
 const runs = Number(option('runs', 30));
+const frequencyShare = Number(option('frequency', 0.1));
+const ghostShare = Number(option('ghost', 0.06));
 const timezone = option('zone', 'America/Los_Angeles');
 const now = Date.parse(option('now', '2026-10-14T19:07:42Z'));
 
@@ -64,7 +67,7 @@ const errors = [];
 for (let i = 0; i < tripCount; i++) {
   const id = `trip-${i}`;
   const startSecs = int(4 * 3600, 26 * 3600);
-  const frequency = random() < 0.1;
+  const frequency = random() < frequencyShare;
   const rows = frequency
     ? Array.from({ length: int(1, 3) }, () => {
         const start = int(4 * 3600, 22 * 3600);
@@ -131,12 +134,13 @@ const add = (feed, entities) => {
 // that the references mostly match.
 const [first, firstResult] = ms(() => engine.list('active-without-realtime'));
 const active = firstResult.trips.map((t) => t.tripId);
+let ghosts = 0;
 const pick = () =>
-  random() < 0.7 && active.length > 0
-    ? active[int(0, active.length - 1)]
-    : random() < 0.8
-      ? some()
-      : `ghost-${int(0, 99)}`;
+  random() < ghostShare
+    ? `ghost-${ghosts++}`
+    : random() < 0.7 && active.length > 0
+      ? active[int(0, active.length - 1)]
+      : some();
 add(
   'vehiclePositions',
   Array.from({ length: vehicleCount }, (_, i) => ({

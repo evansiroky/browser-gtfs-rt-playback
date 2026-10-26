@@ -205,7 +205,8 @@ the clock, the `SnapshotStore`, a `PingStore` and a function returning the loade
 (or `null`), and its three calls return the shared API types:
 
 - `dashboard()` - a `DashboardResponse` (schedule-dependent fields null while the schedule is not
-  ready; `configurationErrors.total` counts errors, so a trip with both codes counts twice).
+  ready; `configurationErrors.total` counts errors, so a trip with two codes counts twice; the active
+  entries are counted by arithmetic and entries are made only for the trips the references name).
 - `list(name)` - a `TripListResponse`; throws `ScheduleNotReadyError` before the schedule is ready.
 - `detail(tripId)` - a `TripDetailResponse`, or `null` when the trip ID is in neither the schedule nor
   the retained realtime data (a latest-snapshot reference or a retained ping).
@@ -215,31 +216,43 @@ clock afresh; nothing derived from time or from realtime data is kept. The one s
 call is `ScheduleIndex` (`entries.ts`), the entries ordered by start second plus the entries per service
 and the configuration errors per trip: a pure function of the immutable store, held in a `WeakMap` keyed
 by it, so it goes with the store at dormancy. It makes "active this minute" and "scheduled today" cost
-the active entries and the services rather than every trip.
+the active items and the services rather than every trip.
 
 - **Time** (`time.ts`) is `Intl.DateTimeFormat` in the agency zone: the service day starts at local noon
   minus 12 hours of elapsed time, and the candidate dates are today and yesterday as the agency clock reads
   them. On the evening before a spring-forward day the next service day has already started (23:00) while
   "today" is still the day before, so its early trips are not looked at until midnight.
-- **Entries.** A plain trip is one entry. A frequency trip is one entry per nominal instance of each
-  readable row (`HH:MM:SS` times, a positive whole `headway_secs`); instances are counted and found by
-  arithmetic, never listed, so a row of one-second headways costs nothing. Rows that overlap produce
-  their instances separately, one entry each. A trip with a configuration error has none. An entry active
-  on both candidate dates is one entry, on the later.
+- **Entries.** A plain trip is one entry, identified by its trip ID. A frequency trip is one entry per
+  nominal instance of each readable row (GTFS times, a positive whole `headway_secs`), identified by trip
+  and start instant: instances are counted and found by arithmetic. A row that could have more than 2,000
+  instances running at once (`MAX_CONCURRENT_INSTANCES`, `schedule/frequency.ts`) makes the trip a
+  `frequency_too_dense` configuration error at load, with no entries, so no request enumerates more than
+  2,000 instances per row. Only trips whose instants can repeat (rows with overlapping windows, or
+  instances more than 23 h apart, which can meet the next date's own) are enumerated and de-duplicated:
+  the first row in the file describes an instant, the later service date owns it, and a plain trip
+  active on both candidate dates is one entry on the later. A trip with a configuration error has none.
+  Rows that cannot be read produce no instances and stay in the trip detail with null values.
 - **References** come from the latest snapshot of each feed; an absent optional field is null, never the
   decoder's default 0. `start_date` must be a real `YYYYMMDD` date; `start_time` is parsed with
-  `parseGtfsTime` (hours may pass 24, a single digit is fine) and an unreadable one matches no instance.
-- **Pings** (`pings.ts`): `PingStore` listens to the snapshot store. Pings are kept while a retained
-  snapshot contains them; their estimated size is reserved against the history memory limit
-  (`SnapshotStore.reserveMemory`), so memory-limit eviction also expires them. `forTrip` is ascending by
-  sequence; sequences per trip ID restart only at dormancy. Vehicle position fields beyond the typed ones
-  are passed through under their camelCase names (`vehicle` and `trip` hold the leftovers of those
-  messages, `position` those of the position).
+  `parseGtfsTime` (hours may pass 24, a single digit is fine) and an unreadable one matches no instance;
+  a vehicle timestamp of 0 is none.
+- **Pings** (`pings.ts`): `PingStore` listens to the snapshot store and keeps an **index**, not decoded
+  pings: per ping its identity (trip, vehicle, timestamp), sequence number, first receipt and the byte range
+  of its entity in the newest retained snapshot that contains it (`entityRanges` walks the snapshot's
+  bytes once; a snapshot it cannot walk keeps each entity's own bytes). `forTrip` decodes those entities
+  and builds the fields then (ascending by sequence; fields beyond the typed ones pass through under their
+  camelCase names, `vehicle`, `trip` and `position` holding the leftovers of those messages). A ping lasts
+  as long as a retained snapshot contains it; the index (about 200 bytes plus the key per ping, about
+  twice the entity's protobuf size for a realistic entity) is reserved against the history memory limit
+  (`SnapshotStore.reserveMemory`), the latest snapshot of each feed is never evicted, and sequences per trip
+  ID restart only at dormancy. A vehicle timestamp of 0 is none (the header's, then the receive time).
 - **List 3 rows** are grouped by trip ID (and start for frequency trips); a group naming several service
   dates takes the latest and the reason is worked out from that reference. `realtime.vehicleIds` is in
   order of appearance (vehicle positions, then trip updates), without references that lack a vehicle ID.
 - **Empty cells** in `trips.txt` and `routes.txt` (`trip_headsign`, `route_short_name`, `route_long_name`,
-  `route_id`, `shape_id`) are reported as null; the trip and route rows themselves are returned whole.
+  `route_id`, `shape_id`) are reported as null (an empty `route_id` is no route, so the reference's is
+  used); the trip and route rows themselves are returned whole. No array of unbounded length is spread into
+  a call (130 000 references to one trip are fine).
 
 ## Benchmark
 
@@ -264,6 +277,7 @@ positions and a trip updates snapshot (default 5 000 and 3 000 entities, mostly 
 
 ```bash
 node server/scripts/bench-trips.mjs [--trips N] [--vehicles N] [--updates N] [--runs N] [--zone TZ] [--now ISO]
+     [--frequency SHARE] [--ghost SHARE]
 ```
 
 It prints the first call (which builds the schedule index) and p50/p95/max of each list, the dashboard
