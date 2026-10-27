@@ -231,7 +231,7 @@ export interface TripFrequencyDetail {
   row: GtfsRow;
   /** As sent (absent = false); informational only. */
   exactTimes: boolean;
-  /** Null, like the window, when the row cannot be read: it then has no instances. */
+  /** Null when this value cannot be read (each of headway, window start and end is nulled independently); a row with any null has no instances. */
   headwaySecs: number | null;
   windowStart: EpochSeconds | null;
   windowEnd: EpochSeconds | null;

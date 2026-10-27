@@ -84,7 +84,7 @@ scheduled: {                                         // null when the trip ID is
   frequencies: [{                                    // null for plain trips
     row:         { [column: string]: string }        // every column of the frequencies.txt row
     exactTimes:  boolean                             // as sent (absent = false); informational only
-    headwaySecs: integer | null                     // null (with the window) when the row cannot be read
+    headwaySecs: integer | null                     // null when the value cannot be read; each of the three is nulled independently
     windowStart: epoch seconds | null
     windowEnd:   epoch seconds | null
     templateDurationSecs: integer | null            // null when the trip has unusable_stop_times

@@ -55,8 +55,11 @@ new one starts dormant). State is process memory only — see
 
 ```
 /            package manifest(s), Dockerfile, CLAUDE.md
+shared/      API types and the polyline codec used by server and web
 server/      API + ingestion
 web/         React app
+fixtures/    synthetic schedule and feeds with ground truth (tests, e2e, local fake feeds)
+e2e/         Playwright suite over the real server and built web app (`npm run e2e`)
 scripts/     bootstrap.sh, teardown.sh (see infrastructure.md)
 infra/       Terraform
 specs/ plans/ .github/
@@ -73,7 +76,14 @@ Exact internal layout of `server/` and `web/` is an implementation decision.
   timeouts are bounded ([behaviors/feed-ingest.md](behaviors/feed-ingest.md)).
 - The API is rate-limited per client address ([api/conventions.md](api/conventions.md)).
 - Responses carry a Content-Security-Policy that allows only the app's own origin and the
-  configured tile host.
+  configured tile host. The map library additionally needs `worker-src 'self'` (its worker is
+  a file served by the app), `data:`/`blob:` images and inline styles; no other third-party origin
+  is allowed.
+- Process hygiene: request bodies, header/request timeouts and route parameter lengths are
+  bounded; `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` accompany every
+  response; SIGTERM/SIGINT drain with a hard deadline and an unhandled error exits non-zero.
+- Static serving: any non-`/api` GET/HEAD that is not an asset gets the web app (deep links such as
+  `/trips/{id}` depend on it); a missing `/assets/*` or file-extension path is a plain 404.
 
 ## Out of scope (v1)
 

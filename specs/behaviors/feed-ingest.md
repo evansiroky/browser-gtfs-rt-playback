@@ -28,6 +28,11 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   least one of `calendar.txt` / `calendar_dates.txt`) fail the load with a descriptive,
   feed-URL-free error. `frequencies.txt` and `shapes.txt` are optional; without them there
   are no frequency trips and no shapes.
+- The archive is bounded beyond the download limit: inflating more than 8 × `SCHEDULE_MAX_BYTES`
+  fails the load as `too_large`, parsing longer than 4 × `SCHEDULE_TIMEOUT_MS` as `timeout`, and an
+  archive of more than 10,000 entries as `bad_zip`. Only files at the archive's top level are read.
+  Rows the loader cannot use (a repeated `trip_id`/`route_id` after the first, malformed dates or
+  times, a non-numeric `stop_sequence`) are skipped or treated as absent.
 - On failure, one automatic retry follows after 30 s. If that also fails, the schedule
   stays `failed` until a start retries it. Realtime polling continues regardless.
 - While the schedule is not ready, realtime snapshots are still collected; only

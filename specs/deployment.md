@@ -13,7 +13,9 @@ pull request can never create billable infrastructure.
 ### CI (every pull request and every push to `main`)
 Lint, type-check, unit tests, and a production build of the web app and server, and a
 container image build (not pushed). The same checks run for pull requests and `main`, so a
-merge cannot fail checks that passed on the PR. Changes that only touch documentation
+merge cannot fail checks that passed on the PR. CI also checks formatting, runs the script and
+workflow test suites and Terraform `fmt`/`validate`, smoke-tests the built image, and reports
+(advisory) `npm audit`. The Playwright suite (`npm run e2e`) is run manually, not by CI. Changes that only touch documentation
 (`specs/`, `plans/`, markdown, agent config) do not trigger the deploy pipeline.
 
 ### Deploy (push to `main`, app code changed)

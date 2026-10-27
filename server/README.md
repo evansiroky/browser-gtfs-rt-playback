@@ -27,7 +27,7 @@ value. Empty values count as unset. Durations are milliseconds, sizes bytes.
 | `POLL_INTERVAL_MS`            | `10000`                         | Realtime poll interval                                             |
 | `RT_TIMEOUT_MS`               | `8000`                          | Realtime fetch timeout (whole exchange)                            |
 | `RT_MAX_BYTES`                | `26214400` (25 MiB)             | Realtime body limit, after content decoding                        |
-| `SCHEDULE_TIMEOUT_MS`         | `120000`                        | Schedule download timeout (whole exchange; parsing is not timed)   |
+| `SCHEDULE_TIMEOUT_MS`         | `120000`                        | Schedule download timeout (whole exchange; parsing has its own deadline, see feed-ingest)   |
 | `SCHEDULE_MAX_BYTES`          | `104857600` (100 MiB)           | Schedule download limit, on the body as received (after gzip)      |
 | `SCHEDULE_MEMORY_LIMIT_BYTES` | `805306368` (768 MiB)           | Schedule memory limit: estimated peak of the decoded data          |
 | `IDLE_TIMEOUT_MS`             | `900000` (15 min)               | Inactivity timeout                                                 |
@@ -148,7 +148,7 @@ and query values) before writing.
   `/trips/a.b`, always get the app. `/api` and `/api/*` never fall through: unknown endpoints get
   a `404 not_found` envelope.
 - **Headers.** Every response: `Content-Security-Policy` (self plus `TILE_HOST` in `connect-src`
-  and `img-src`, `blob:` workers, `data:`/`blob:` images, inline styles), `X-Content-Type-Options:
+  and `img-src`, `worker-src 'self'`, `data:`/`blob:` images, inline styles), `X-Content-Type-Options:
 nosniff`, `Referrer-Policy: no-referrer`. Every `/api/v1` response, including router failures
   such as a malformed URL (`400 bad_request`): `Cache-Control: no-store`. Route parameters may be
   up to 1000 characters (long GTFS trip IDs).
@@ -190,7 +190,8 @@ interface ScheduleStore {
 - **Configuration errors** (trip-activity.md "Schedule entries"). Computed once at load, in
   `trips.txt` order: `mixed_exact_times` when the trip has more than one `frequencies.txt` row and their
   `exact_times` (absent or empty counting as `0`) are not all equal; `unusable_stop_times` when its
-  `template` is null. A trip with both problems appears twice, `mixed_exact_times` first. They never
+  `template` is null; `frequency_too_dense` when a readable row would have more than 2,000 instances
+  active at once. A trip with several problems appears once per code, in that order. They never
   fail the load.
 - **Shapes** are held only as encoded strings. `shapes.txt` is encoded while it streams: a file
   grouped by `shape_id` holds one shape's raw points at a time; the first time a `shape_id` returns

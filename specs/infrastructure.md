@@ -11,7 +11,7 @@ Governing principle: [Cost ceiling beats convenience](principles.md#cost-ceiling
 
 | Resource | Rule |
 |---|---|
-| Cloud Run service | One service. **Max instances 1** (one process holds all state in memory, so never more than one serves at a time; the limit is per revision, so during a deploy the old and new revision may briefly overlap, and the new one starts empty), **min instances 0**, **CPU always allocated** (the 10 s poller runs between requests), 1 vCPU and 2 GiB memory, request concurrency 80, the container port taken from the platform. Region default `us-west1`, a single variable. |
+| Cloud Run service | One service. **Max instances 1** (one process holds all state in memory, so never more than one serves at a time; the limit is per revision, so during a deploy the old and new revision may briefly overlap, and the new one starts empty), **min instances 0**, **CPU always allocated** (the 10 s poller runs between requests), 1 vCPU and 2 GiB memory, request concurrency 80, the container listening on port 8080 (the server default `PORT`). Region default `us-west1`, a single variable. |
 | Public access | The service is invokable by anyone without authentication (it is a public site). |
 | Runtime service account | Dedicated; its only grant is access to the feed-URL secrets. No project-level roles. |
 | Secret Manager secrets | One secret per feed URL (schedule, vehicle positions, trip updates). Cloud Run cannot create a service whose secret has no version, so Terraform creates each secret with a **placeholder** first version (a syntactically valid URL on a reserved `.invalid` host, never a real value); the operator then adds the real URL as a new version (`gcloud secrets versions add`), which the service reads at its next start. Terraform never manages the real versions, so feed URLs and any embedded keys never enter Terraform state, variables, or CI logs. The service reads the secrets as environment variables (`latest` version). |
@@ -40,7 +40,7 @@ retention.
 The scripts do exactly what Terraform cannot do for itself, so they are not Terraform. Both
 are POSIX-friendly bash with strict error handling, take their inputs as flags with
 environment-variable fallbacks (project ID, region, GitHub `owner/repo`), print every
-action before running it, and need only `gcloud`.
+action before running it, and need only `gcloud` (teardown also runs `terraform destroy`, so it needs `terraform` unless told to skip that step).
 
 ### `scripts/bootstrap.sh`
 Run once by the operator, authenticated as a project owner, on a project they created.
