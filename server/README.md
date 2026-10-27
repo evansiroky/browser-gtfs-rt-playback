@@ -18,26 +18,26 @@ Read once at startup by `loadConfig(env)` (`src/config.ts`, a pure function of t
 Any problem refuses start with exit code 1 and a message that names the variable, never its
 value. Empty values count as unset. Durations are milliseconds, sizes bytes.
 
-| Variable                      | Default                         | Meaning                                                            |
-| ----------------------------- | ------------------------------- | ------------------------------------------------------------------ |
-| `SCHEDULE_URL`                | required                        | GTFS Schedule zip URL                                              |
-| `VEHICLE_POSITIONS_URL`       | one of the two required         | GTFS-RT VehiclePositions URL                                       |
-| `TRIP_UPDATES_URL`            | one of the two required         | GTFS-RT TripUpdates URL                                            |
-| `PORT`                        | `8080`                          | Listen port (all interfaces); `0` picks a free port                |
-| `POLL_INTERVAL_MS`            | `10000`                         | Realtime poll interval                                             |
-| `RT_TIMEOUT_MS`               | `8000`                          | Realtime fetch timeout (whole exchange)                            |
-| `RT_MAX_BYTES`                | `26214400` (25 MiB)             | Realtime body limit, after content decoding                        |
-| `SCHEDULE_TIMEOUT_MS`         | `120000`                        | Schedule download timeout (whole exchange; parsing has its own deadline, see feed-ingest)   |
-| `SCHEDULE_MAX_BYTES`          | `104857600` (100 MiB)           | Schedule download limit, on the body as received (after gzip)      |
-| `SCHEDULE_MEMORY_LIMIT_BYTES` | `805306368` (768 MiB)           | Schedule memory limit: estimated peak of the decoded data          |
-| `IDLE_TIMEOUT_MS`             | `900000` (15 min)               | Inactivity timeout                                                 |
-| `MAX_ACTIVATION_MS`           | `7200000` (2 h)                 | Maximum activation duration                                        |
-| `EXIT_ON_IDLE`                | `false`                         | `true`/`false` (or `1`/`0`); the deployment sets `true`            |
-| `RETENTION_MS`                | `3600000` (60 min)              | Realtime retention; above 60 min is clamped to 60 (with a warning) |
-| `HISTORY_MEMORY_LIMIT_BYTES`  | `536870912` (512 MiB)           | Realtime history limit; must be ≥ 2 × `RT_MAX_BYTES`               |
-| `RATE_LIMIT_PER_MIN`          | `120`                           | `/api/v1` requests per minute per client                           |
-| `TILE_HOST`                   | `https://tiles.openfreemap.org` | Map tile origin allowed by the CSP; must match the web app's style |
-| `WEB_DIST_DIR`                | `<repo>/web/dist`               | Built web app (default is relative to the server module, else cwd) |
+| Variable                      | Default                         | Meaning                                                                                   |
+| ----------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------- |
+| `SCHEDULE_URL`                | required                        | GTFS Schedule zip URL                                                                     |
+| `VEHICLE_POSITIONS_URL`       | one of the two required         | GTFS-RT VehiclePositions URL                                                              |
+| `TRIP_UPDATES_URL`            | one of the two required         | GTFS-RT TripUpdates URL                                                                   |
+| `PORT`                        | `8080`                          | Listen port (all interfaces); `0` picks a free port                                       |
+| `POLL_INTERVAL_MS`            | `10000`                         | Realtime poll interval                                                                    |
+| `RT_TIMEOUT_MS`               | `8000`                          | Realtime fetch timeout (whole exchange)                                                   |
+| `RT_MAX_BYTES`                | `26214400` (25 MiB)             | Realtime body limit, after content decoding                                               |
+| `SCHEDULE_TIMEOUT_MS`         | `120000`                        | Schedule download timeout (whole exchange; parsing has its own deadline, see feed-ingest) |
+| `SCHEDULE_MAX_BYTES`          | `104857600` (100 MiB)           | Schedule download limit, on the body as received (after gzip)                             |
+| `SCHEDULE_MEMORY_LIMIT_BYTES` | `805306368` (768 MiB)           | Schedule memory limit: estimated peak of the decoded data                                 |
+| `IDLE_TIMEOUT_MS`             | `900000` (15 min)               | Inactivity timeout                                                                        |
+| `MAX_ACTIVATION_MS`           | `7200000` (2 h)                 | Maximum activation duration                                                               |
+| `EXIT_ON_IDLE`                | `false`                         | `true`/`false` (or `1`/`0`); the deployment sets `true`                                   |
+| `RETENTION_MS`                | `3600000` (60 min)              | Realtime retention; above 60 min is clamped to 60 (with a warning)                        |
+| `HISTORY_MEMORY_LIMIT_BYTES`  | `536870912` (512 MiB)           | Realtime history limit; must be ≥ 2 × `RT_MAX_BYTES`                                      |
+| `RATE_LIMIT_PER_MIN`          | `120`                           | `/api/v1` requests per minute per client                                                  |
+| `TILE_HOST`                   | `https://tiles.openfreemap.org` | Map tile origin allowed by the CSP; must match the web app's style                        |
+| `WEB_DIST_DIR`                | `<repo>/web/dist`               | Built web app (default is relative to the server module, else cwd)                        |
 
 Rules (`specs/behaviors/configuration.md`):
 
