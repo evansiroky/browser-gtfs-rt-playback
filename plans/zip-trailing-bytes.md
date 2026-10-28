@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 depends: [schedule-loader]
 specs:
   - specs/behaviors/feed-ingest.md
@@ -33,12 +33,12 @@ any other malformed archive; restricting feed URLs.
   archive, still fail as `bad_zip`.
 
 ## Validation
-- [ ] `npm run lint`, `typecheck`, `test`, `build` and `format:check` pass.
-- [ ] A zip with 16 stray bytes after its end record (the MST shape) loads; the same zip without
+- [x] `npm run lint`, `typecheck`, `test`, `build` and `format:check` pass.
+- [x] A zip with 16 stray bytes after its end record (the MST shape) loads; the same zip without
       the bytes loads identically.
-- [ ] A zip whose comment is followed by stray bytes loads.
-- [ ] A truncated zip and a non-zip body still fail as `bad_zip`.
-- [ ] The MST archive from 2026-10-28 loads through `parseSchedule`.
+- [x] A zip whose comment is followed by stray bytes loads.
+- [x] A truncated zip and a non-zip body still fail as `bad_zip`.
+- [x] The MST archive from 2026-10-28 loads through `parseSchedule`.
 
 ## Risks / unknowns
 - **Hostile archives** — tolerance lets a file present different contents to this server than to a
@@ -46,7 +46,15 @@ any other malformed archive; restricting feed URLs.
   in the architecture's security posture for when that changes.
 
 ## Notes
-(Populated at closeout.)
+- The cause was `yauzl` checking the end record's comment length against the bytes after it, which
+  is why the log showed `bad_zip` after 1 ms: the failure came before any entry was read. Without
+  the change the MST archive fails as `bad_zip`; with it, it loads (3,087 trips, 38 routes, 83
+  shapes).
+- "Loads identically" for a zip without the stray bytes is covered by the existing tests, which all
+  use clean archives.
+- A valid archive whose comment contains the end record signature is still rejected by `yauzl`,
+  which takes the signature nearest the end. That predates this change and is not handled.
+- The `pr` field is unset: the branch had no PR when the plan was closed.
 
 ## Follow-ups
-(Populated at closeout.)
+None.
