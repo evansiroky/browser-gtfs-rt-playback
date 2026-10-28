@@ -74,6 +74,11 @@ Exact internal layout of `server/` and `web/` is an implementation decision.
   environment from Secret Manager, never returned by the API, never logged.
 - The server only fetches the configured URLs; request redirects, response sizes, and
   timeouts are bounded ([behaviors/feed-ingest.md](behaviors/feed-ingest.md)).
+- Several defences rely on the operator choosing the feed URLs and would need revisiting before
+  users can supply their own: the schedule zip reader tolerates bytes after the archive
+  ([behaviors/feed-ingest.md](behaviors/feed-ingest.md#schedule)), so a hostile file could append a
+  second end-of-central-directory record and show this server different contents than a tool that
+  reads the same file another way; and the configured URL itself is not restricted to public hosts.
 - The API is rate-limited per client address ([api/conventions.md](api/conventions.md)).
 - Responses carry a Content-Security-Policy that allows only the app's own origin and the
   configured tile host. The map library additionally needs `worker-src 'self'` (its worker is
