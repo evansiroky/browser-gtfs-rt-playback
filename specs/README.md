@@ -18,7 +18,7 @@ specs/
 ├── api/               # one file per endpoint group; conventions.md for shared rules
 ├── screens/           # one file per screen/route
 └── behaviors/         # cross-cutting rules: configuration, session lifecycle, client
-                       #   activity, feed ingest, retention, trip activity
+                       #   activity, feed ingest, logging, retention, trip activity
 ```
 
 ## Conventions
