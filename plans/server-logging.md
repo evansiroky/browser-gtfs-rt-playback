@@ -1,5 +1,6 @@
 ---
 status: done
+pr: 6
 depends: [server-core, schedule-loader, trips-api]
 specs:
   - specs/behaviors/logging.md
@@ -61,7 +62,7 @@ metrics or tracing.
   exposes no elapsed time on a request, only on a reply.
 - The poller's old `realtime fetch failed` line was removed: `fetch failed` and `realtime parse
   failed` now say the same thing with more detail.
-- No PR exists yet, so `pr` is not set. `npm run e2e` was not run; the suite does not read the log.
+- `npm run e2e` was not run; the suite does not read the log.
 
 ## Follow-ups
 None.
