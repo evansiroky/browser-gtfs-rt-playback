@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Fake terraform for scripts/test/run-tests.sh: records each call (with the TF_VAR_*
+# environment for destroy) in $FAKE_LOG. FAKE_TF_FAIL=destroy makes destroy fail.
+set -euo pipefail
+
+line="mutate terraform $*"
+if [[ " $* " == *" destroy "* ]]; then
+  line+=" | $(env | grep '^TF_VAR_' | sort | tr '\n' ' ')"
+  if [[ ${FAKE_TF_FAIL:-} == destroy ]]; then
+    printf '%s\n' "$line" >>"${FAKE_LOG:?}"
+    echo "Error: fake destroy failure" >&2
+    exit 1
+  fi
+fi
+printf '%s\n' "$line" >>"${FAKE_LOG:?}"

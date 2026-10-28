@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+
+# Terraform (infra/): local working data, state and saved plans. The provider lock file and infra/settings.auto.tfvars (no secrets) are committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!infra/settings.auto.tfvars
+crash.log

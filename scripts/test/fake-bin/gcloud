@@ -1,0 +1,418 @@
+#!/usr/bin/env bash
+# Fake gcloud for scripts/test/run-tests.sh. It implements only the commands
+# bootstrap.sh and teardown.sh use, simulates resources as files under $FAKE_STATE,
+# and appends every call to $FAKE_LOG as "read gcloud ..." or "mutate gcloud ...".
+# Any other command fails loudly (exit 99) so the scripts cannot drift unnoticed.
+#
+# State layout ($FAKE_STATE):
+#   project_id, project_number, lifecycle   the one project (lifecycle: ACTIVE, ...)
+#   billing_enabled, billing_account        "True"/"False"; "billingAccounts/<id>"
+#   billing_denied                          present: caller cannot read/change billing IAM
+#   services                                enabled APIs, one per line
+#   project_iam, billing_iam                "role<TAB>member[<TAB>condition expression]" lines
+#   buckets/<name>/{labels,versioning,iam,objects}
+#                                           labels: "key=value" lines; versioning: True/False;
+#                                           objects: object names, one per line
+#   foreign/<name>/labels                   a bucket of that name in another project
+#   pool, provider                          state: ACTIVE or DELETED
+#   provider_condition, provider_mapping, provider_issuer
+#   sa/<email>, sa/<email>.iam              service accounts and their IAM policies
+#   deny                                    substrings: a call containing one fails with
+#                                           PERMISSION_DENIED (logged as "denied")
+#
+# iam and storage commands fail with SERVICE_DISABLED unless their API is in services.
+set -euo pipefail
+
+S=${FAKE_STATE:?FAKE_STATE must be set}
+LOG=${FAKE_LOG:?FAKE_LOG must be set}
+
+POS=()
+for arg in "$@"; do
+  case $arg in
+    --*) ;;
+    *) POS+=("$arg") ;;
+  esac
+done
+
+# flag <name>: prints the value of --name=value; a bare --name prints "1"; absent fails.
+flag() {
+  local arg
+  for arg in "${ARGS[@]}"; do
+    case $arg in
+      "--$1="*) printf '%s' "${arg#*=}"; return 0 ;;
+      "--$1") printf '1'; return 0 ;;
+    esac
+  done
+  return 1
+}
+ARGS=("$@")
+
+record() {
+  local kind=$1
+  shift
+  printf '%s gcloud %s\n' "$kind" "$*" >>"$LOG"
+}
+fail() {
+  printf 'ERROR: (gcloud) %s\n' "$*" >&2
+  exit 1
+}
+unsupported() {
+  printf 'unsupported gcloud %s\n' "${ARGS[*]}" >>"$LOG"
+  printf 'fake gcloud: unsupported command: %s\n' "${ARGS[*]}" >&2
+  exit 99
+}
+
+project() { cat "$S/project_id"; }
+check_project() {
+  local p
+  p=$(flag project) || fail "--project is required by the harness"
+  [[ $p == "$(project)" ]] || fail "unknown project $p"
+}
+expect_flag() {
+  local got
+  got=$(flag "$1") || unsupported
+  [[ $got == "$2" ]] || unsupported
+}
+# print_policy <file>: like gcloud's value() output, an unconditional row ends in a tab.
+print_policy() {
+  expect_flag flatten 'bindings[].members'
+  expect_flag format 'value(bindings.role,bindings.members,bindings.condition.expression)'
+  local role member expression
+  [[ -f $1 ]] || return 0
+  while IFS=$'\t' read -r role member expression; do
+    printf '%s\t%s\t%s\n' "$role" "$member" "$expression"
+  done <"$1"
+}
+# row <role> <member> [<expression>]: a policy file line.
+row() {
+  if [[ -n ${3:-} ]]; then
+    printf '%s\t%s\t%s' "$1" "$2" "$3"
+  else
+    printf '%s\t%s' "$1" "$2"
+  fi
+}
+# condition_expression: the expression of --condition (empty for None); the harness
+# requires a title on every real condition, as gcloud does.
+condition_expression() {
+  local condition
+  condition=$(flag condition) || unsupported
+  [[ $condition == None ]] && return 0
+  [[ $condition == expression=*,title=* ]] || fail "harness: condition must be expression=...,title=..."
+  condition=${condition#expression=}
+  printf '%s' "${condition%,title=*}"
+}
+add_row() {
+  local line
+  line=$(row "$2" "$3" "${4:-}")
+  touch "$1"
+  grep -Fxq -- "$line" "$1" || printf '%s\n' "$line" >>"$1"
+}
+remove_row() {
+  local line
+  line=$(row "$2" "$3")
+  grep -Fxq -- "$line" "$1" 2>/dev/null ||
+    fail "Policy binding with the specified principal, role, and condition not found!"
+  grep -Fxv -- "$line" "$1" >"$1.tmp" || true
+  mv "$1.tmp" "$1"
+}
+# remove_all_rows <file> <role> <member>: --all, whatever the condition.
+remove_all_rows() {
+  grep -Fq -- "$2"$'\t'"$3" "$1" 2>/dev/null ||
+    fail "Policy binding with the specified principal, role, and condition not found!"
+  grep -Fv -- "$2"$'\t'"$3" "$1" >"$1.tmp" || true
+  mv "$1.tmp" "$1"
+}
+bucket_dir() {
+  local url=$1
+  [[ $url == gs://* ]] || unsupported
+  url=${url#gs://}
+  printf '%s/buckets/%s' "$S" "${url%/}"
+}
+sa_file() { printf '%s/sa/%s' "$S" "$1"; }
+
+cmd="${POS[*]}"
+
+if [[ -f $S/deny ]]; then
+  while IFS= read -r pattern; do
+    if [[ -n $pattern && "$*" == *"$pattern"* ]]; then
+      printf 'denied gcloud %s\n' "$*" >>"$LOG"
+      fail "PERMISSION_DENIED: the caller does not have permission"
+    fi
+  done <"$S/deny"
+fi
+for api in iam storage; do
+  if [[ ${POS[0]} == "$api" ]] && ! grep -Fxq "$api.googleapis.com" "$S/services" 2>/dev/null; then
+    printf 'read gcloud %s\n' "$*" >>"$LOG"
+    fail "SERVICE_DISABLED: $api.googleapis.com has not been used in project $(project) before or it is disabled."
+  fi
+done
+
+case $cmd in
+  "projects describe "*)
+    record read "$@"
+    [[ ${POS[2]} == "$(project)" ]] || fail "project ${POS[2]} not found"
+    expect_flag format 'value(lifecycleState,projectNumber)'
+    printf '%s\t%s\n' "$(cat "$S/lifecycle")" "$(cat "$S/project_number")"
+    ;;
+  "projects get-iam-policy "*)
+    record read "$@"
+    print_policy "$S/project_iam"
+    ;;
+  "projects add-iam-policy-binding "*)
+    record mutate "$@"
+    [[ ${POS[2]} == "$(project)" ]] || fail "unknown project"
+    expect_flag condition None
+    add_row "$S/project_iam" "$(flag role)" "$(flag member)"
+    ;;
+  "projects remove-iam-policy-binding "*)
+    record mutate "$@"
+    [[ ${POS[2]} == "$(project)" ]] || fail "unknown project"
+    if flag all >/dev/null; then
+      remove_all_rows "$S/project_iam" "$(flag role)" "$(flag member)"
+    else
+      # Like gcloud, refuse to guess when the member+role also has a conditional binding.
+      if grep -Fq -- "$(flag role)"$'\t'"$(flag member)"$'\t' "$S/project_iam"; then
+        fail "Adding a binding without specifying a condition to a policy containing conditions is prohibited"
+      fi
+      remove_row "$S/project_iam" "$(flag role)" "$(flag member)"
+    fi
+    ;;
+  "projects delete "*)
+    record mutate "$@"
+    [[ ${POS[2]} == "$(project)" ]] || fail "unknown project"
+    echo DELETE_REQUESTED >"$S/lifecycle"
+    ;;
+  "billing projects describe "*)
+    record read "$@"
+    [[ ${POS[3]} == "$(project)" ]] || fail "project not found"
+    expect_flag format 'value(billingEnabled,billingAccountName)'
+    if [[ $(cat "$S/billing_enabled") == True ]]; then
+      printf 'True\t%s\n' "$(cat "$S/billing_account")"
+    else
+      printf 'False\n'
+    fi
+    ;;
+  "billing accounts get-iam-policy "*)
+    record read "$@"
+    [[ ! -e $S/billing_denied ]] || fail "PERMISSION_DENIED: billing.accounts.getIamPolicy"
+    [[ billingAccounts/${POS[3]} == "$(cat "$S/billing_account")" ]] || fail "unknown billing account ${POS[3]}"
+    print_policy "$S/billing_iam"
+    # Rows listed but already removed by someone else (a stale read).
+    if [[ -f $S/billing_iam_stale ]]; then
+      print_policy "$S/billing_iam_stale"
+    fi
+    ;;
+  "billing accounts add-iam-policy-binding "* | "billing accounts remove-iam-policy-binding "*)
+    record mutate "$@"
+    [[ ! -e $S/billing_denied ]] || fail "PERMISSION_DENIED: billing.accounts.setIamPolicy"
+    [[ billingAccounts/${POS[3]} == "$(cat "$S/billing_account")" ]] || fail "unknown billing account"
+    if [[ ${POS[2]} == add-iam-policy-binding ]]; then
+      add_row "$S/billing_iam" "$(flag role)" "$(flag member)"
+    else
+      remove_row "$S/billing_iam" "$(flag role)" "$(flag member)"
+    fi
+    ;;
+  "services list")
+    record read "$@"
+    check_project
+    expect_flag enabled 1
+    expect_flag format 'value(config.name)'
+    cat "$S/services" 2>/dev/null || true
+    ;;
+  "services enable "*)
+    record mutate "$@"
+    check_project
+    printf '%s\n' "${POS[@]:2}" >>"$S/services"
+    ;;
+  "storage buckets list")
+    record read "$@"
+    check_project
+    expect_flag format 'value(name)'
+    if [[ -d $S/buckets ]]; then
+      ls "$S/buckets"
+    fi
+    ;;
+  "storage ls "*)
+    record read "$@"
+    expect_flag all-versions 1
+    dir=$(bucket_dir "${POS[2]}")
+    [[ -d $dir ]] || fail "gs://${POS[2]#gs://} not found: 404."
+    if [[ -f $dir/objects ]]; then
+      sed "s|^|${POS[2]%/}/|; s|\$|#1|" "$dir/objects"
+    fi
+    ;;
+  "storage buckets describe "*)
+    record read "$@"
+    dir=$(bucket_dir "${POS[3]}")
+    if [[ ! -d $dir ]]; then
+      # Buckets of other projects are visible too when the caller can read them.
+      dir=$S/foreign/${POS[3]#gs://}
+    fi
+    [[ -d $dir ]] || fail "gs://${POS[3]#gs://} not found: 404."
+    case $(flag format) in
+      'json(labels)')
+        printf '{\n  "labels": {\n'
+        if [[ -s $dir/labels ]]; then
+          sed 's/^\([^=]*\)=\(.*\)$/    "\1": "\2",/' "$dir/labels" | sed '$ s/,$//'
+        fi
+        printf '  }\n}\n'
+        ;;
+      'value(versioning_enabled)') cat "$dir/versioning" 2>/dev/null || true ;;
+      *) unsupported ;;
+    esac
+    ;;
+  "storage buckets create "*)
+    record mutate "$@"
+    check_project
+    dir=$(bucket_dir "${POS[3]}")
+    if [[ -d $dir || -d $S/foreign/${POS[3]#gs://} ]]; then
+      fail "HTTPError 409: The requested bucket name is not available."
+    fi
+    flag uniform-bucket-level-access >/dev/null || fail "harness: expected --uniform-bucket-level-access"
+    mkdir -p "$dir"
+    ;;
+  "storage buckets update "*)
+    record mutate "$@"
+    dir=$(bucket_dir "${POS[3]}")
+    [[ -d $dir ]] || fail "bucket not found: 404"
+    if flag versioning >/dev/null; then echo True >"$dir/versioning"; fi
+    if labels=$(flag update-labels); then
+      printf '%s\n' "${labels//,/$'\n'}" >>"$dir/labels"
+    fi
+    ;;
+  "storage buckets get-iam-policy "*)
+    record read "$@"
+    dir=$(bucket_dir "${POS[3]}")
+    [[ -d $dir ]] || fail "bucket not found: 404"
+    print_policy "$dir/iam"
+    ;;
+  "storage buckets add-iam-policy-binding "*)
+    record mutate "$@"
+    dir=$(bucket_dir "${POS[3]}")
+    [[ -d $dir ]] || fail "bucket not found: 404"
+    add_row "$dir/iam" "$(flag role)" "$(flag member)" "$(condition_expression)"
+    ;;
+  "storage rm "*)
+    record mutate "$@"
+    flag recursive >/dev/null || unsupported
+    dir=$(bucket_dir "${POS[2]}")
+    [[ -d $dir ]] || fail "bucket not found: 404"
+    rm -rf "$dir"
+    ;;
+  "iam workload-identity-pools providers "*)
+    check_project
+    expect_flag location global
+    [[ ${POS[4]} == github ]] || fail "harness: unexpected provider ${POS[4]}"
+    expect_flag workload-identity-pool github
+    state=$(cat "$S/provider" 2>/dev/null || true)
+    case ${POS[3]} in
+      describe)
+        record read "$@"
+        [[ -n $state ]] || fail "NOT_FOUND: provider"
+        case $(flag format) in
+          'value(state)') echo "$state" ;;
+          'value(attributeCondition,oidc.issuerUri)')
+            printf '%s\t%s\n' "$(cat "$S/provider_condition" 2>/dev/null)" "$(cat "$S/provider_issuer" 2>/dev/null)"
+            ;;
+          'json(attributeMapping)')
+            # gcloud's JSON printer: two-space indent, sorted keys.
+            printf '{\n  "attributeMapping": {\n'
+            tr ',' '\n' <"$S/provider_mapping" | sort | sed 's/^\([^=]*\)=\(.*\)$/    "\1": "\2",/' | sed '$ s/,$//'
+            printf '  }\n}\n'
+            ;;
+          *) unsupported ;;
+        esac
+        ;;
+      create-oidc)
+        record mutate "$@"
+        [[ $(cat "$S/pool" 2>/dev/null) == ACTIVE ]] || fail "NOT_FOUND: pool"
+        [[ -z $state ]] || fail "ALREADY_EXISTS: provider"
+        flag issuer-uri >"$S/provider_issuer"
+        flag attribute-mapping >"$S/provider_mapping"
+        flag attribute-condition >"$S/provider_condition"
+        echo ACTIVE >"$S/provider"
+        ;;
+      undelete)
+        record mutate "$@"
+        [[ $state == DELETED ]] || fail "FAILED_PRECONDITION: provider is not deleted"
+        echo ACTIVE >"$S/provider"
+        ;;
+      delete)
+        record mutate "$@"
+        [[ $state == ACTIVE ]] || fail "NOT_FOUND: provider"
+        echo DELETED >"$S/provider"
+        ;;
+      *) unsupported ;;
+    esac
+    ;;
+  "iam workload-identity-pools "*)
+    check_project
+    expect_flag location global
+    [[ ${POS[3]} == github ]] || fail "harness: unexpected pool ${POS[3]}"
+    state=$(cat "$S/pool" 2>/dev/null || true)
+    case ${POS[2]} in
+      describe)
+        record read "$@"
+        [[ -n $state ]] || fail "NOT_FOUND: pool"
+        expect_flag format 'value(state)'
+        echo "$state"
+        ;;
+      create)
+        record mutate "$@"
+        [[ -z $state ]] || fail "ALREADY_EXISTS: pool"
+        echo ACTIVE >"$S/pool"
+        ;;
+      undelete)
+        record mutate "$@"
+        [[ $state == DELETED ]] || fail "FAILED_PRECONDITION: pool is not deleted"
+        echo ACTIVE >"$S/pool"
+        ;;
+      delete)
+        record mutate "$@"
+        [[ $state == ACTIVE ]] || fail "NOT_FOUND: pool"
+        echo DELETED >"$S/pool"
+        ;;
+      *) unsupported ;;
+    esac
+    ;;
+  "iam service-accounts describe "*)
+    record read "$@"
+    check_project
+    [[ -e $(sa_file "${POS[3]}") ]] || fail "NOT_FOUND: ${POS[3]}"
+    printf '%s\n' "${POS[3]}"
+    ;;
+  "iam service-accounts create "*)
+    record mutate "$@"
+    check_project
+    file=$(sa_file "${POS[3]}@$(project).iam.gserviceaccount.com")
+    [[ ! -e $file ]] || fail "ALREADY_EXISTS: ${POS[3]}"
+    mkdir -p "$S/sa"
+    touch "$file"
+    ;;
+  "iam service-accounts delete "*)
+    record mutate "$@"
+    check_project
+    file=$(sa_file "${POS[3]}")
+    [[ -e $file ]] || fail "NOT_FOUND: ${POS[3]}"
+    rm -f "$file" "$file.iam"
+    ;;
+  "iam service-accounts get-iam-policy "*)
+    record read "$@"
+    check_project
+    file=$(sa_file "${POS[3]}")
+    [[ -e $file ]] || fail "NOT_FOUND: ${POS[3]}"
+    print_policy "$file.iam"
+    ;;
+  "iam service-accounts add-iam-policy-binding "*)
+    record mutate "$@"
+    check_project
+    file=$(sa_file "${POS[3]}")
+    [[ -e $file ]] || fail "NOT_FOUND: ${POS[3]}"
+    expect_flag condition None
+    add_row "$file.iam" "$(flag role)" "$(flag member)"
+    ;;
+  *)
+    record read "$@"
+    unsupported
+    ;;
+esac

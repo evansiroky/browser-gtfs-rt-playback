@@ -1,6 +1,6 @@
 # Specs
 
-`specs/` declares what browser-gtfs-rt-playback *should* do. It is authoritative for the
+`specs/` declares what gtfs-rt-debugger *should* do. It is authoritative for the
 life of the system: implementation is brought into conformance with it, and spec↔code drift
 is a bug. Work in flight lives in [`plans/`](../plans/README.md); the issue tracker is the
 backlog. The full methodology is in the specops skill (`.claude/skills/specops/SKILL.md`).
@@ -12,13 +12,14 @@ specs/
 ├── README.md          # this file
 ├── principles.md      # project-wide principles: decisive rules that resolve unspecified decisions
 ├── architecture.md    # tech stack, project structure, foundational decisions
-├── data-model.md      # (add when there is data to model) schema, fields, relationships
-├── api/               # one file per endpoint or endpoint group; conventions.md for shared rules
+├── data-model.md      # shared concepts: service date, schedule entry, shape, snapshot, ping
+├── infrastructure.md  # GCP resources, Terraform, bootstrap/teardown scripts, cost guards
+├── deployment.md      # CI/CD: how code and infra reach the single environment
+├── api/               # one file per endpoint group; conventions.md for shared rules
 ├── screens/           # one file per screen/route
-└── behaviors/         # cross-cutting rules that span multiple screens
+└── behaviors/         # cross-cutting rules: configuration, session lifecycle, client
+                       #   activity, feed ingest, retention, trip activity
 ```
-
-Add `data-model.md` and the per-area files as the features they describe are specified.
 
 ## Conventions
 
