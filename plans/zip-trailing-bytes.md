@@ -5,6 +5,7 @@ specs:
   - specs/behaviors/feed-ingest.md
   - specs/architecture.md
 issues: []
+pr: 7
 ---
 
 # Plan: Tolerate bytes after the schedule zip
@@ -54,7 +55,6 @@ any other malformed archive; restricting feed URLs.
   use clean archives.
 - A valid archive whose comment contains the end record signature is still rejected by `yauzl`,
   which takes the signature nearest the end. That predates this change and is not handled.
-- The `pr` field is unset: the branch had no PR when the plan was closed.
 
 ## Follow-ups
 None.
