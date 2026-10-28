@@ -33,11 +33,55 @@ class ChunkedReader extends yauzl.RandomAccessReader {
   }
 }
 
+const EOCD_SIGNATURE = 0x06054b50;
+const EOCD_SIZE = 22;
+/** The end record sits within its fixed part plus the longest comment (65 535 bytes) of the end. */
+const MAX_TAIL = EOCD_SIZE + 0xffff;
+
+/** The last `length` bytes of the body, copied. */
+function tailOf({ chunks, size }: ChunkedBody, length: number): Buffer {
+  const start = Math.max(size - length, 0);
+  const parts: Buffer[] = [];
+  let end = size;
+  for (let i = chunks.length - 1; i >= 0 && end > start; i--) {
+    const chunk = chunks[i];
+    if (!chunk) break;
+    const from = Math.max(start - (end - chunk.byteLength), 0);
+    parts.unshift(Buffer.from(chunk.buffer, chunk.byteOffset + from, chunk.byteLength - from));
+    end -= chunk.byteLength;
+  }
+  return Buffer.concat(parts);
+}
+
+/**
+ * Where the archive ends: after its last end-of-central-directory record and that record's
+ * comment, so bytes some writers leave behind are ignored (feed-ingest.md "Schedule"). A record
+ * that ends exactly at the end of the body means there are no such bytes, and wins over a later
+ * signature that merely fits. Without a record the body is returned as it is.
+ * Tolerating trailing bytes lets a file show this reader different contents than a reader that
+ * picks another record, which is acceptable only while the operator chooses the feed URLs.
+ */
+function archiveSize(body: ChunkedBody): number {
+  const tail = tailOf(body, MAX_TAIL);
+  let size = body.size;
+  let found = false;
+  for (let i = tail.length - EOCD_SIZE; i >= 0; i--) {
+    if (tail.readUInt32LE(i) !== EOCD_SIGNATURE) continue;
+    const end = i + EOCD_SIZE + tail.readUInt16LE(i + 20);
+    if (end === tail.length) return body.size;
+    if (end < tail.length && !found) {
+      size = body.size - tail.length + end;
+      found = true;
+    }
+  }
+  return size;
+}
+
 function open(body: ChunkedBody): Promise<yauzl.ZipFile> {
   return new Promise((resolve, reject) => {
     yauzl.fromRandomAccessReader(
       new ChunkedReader(body),
-      body.size,
+      archiveSize(body),
       { lazyEntries: true, autoClose: false, decodeStrings: true, validateEntrySizes: true },
       (error, zipfile) =>
         error || !zipfile ? reject(new ScheduleLoadError('bad_zip', BAD_ZIP)) : resolve(zipfile),
