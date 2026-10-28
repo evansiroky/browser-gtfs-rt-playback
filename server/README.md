@@ -92,7 +92,9 @@ and query values) before writing.
   for the schedule.
   The body is kept as the chunks it arrived in (at most `SCHEDULE_MAX_BYTES`, never one contiguous
   copy) and read with `yauzl` (zip64 and data descriptors included) and streamed through
-  `csv-parse`; nothing is written to disk. Only top-level files of the archive are read
+  `csv-parse`; nothing is written to disk. Bytes after the archive's end record are ignored (some
+  agencies' zips carry stray ones); that is acceptable only while feed URLs are the operator's choice.
+  Only top-level files of the archive are read
   (`agency.txt`, `routes.txt`, `trips.txt`, `calendar.txt`, `calendar_dates.txt`,
   `frequencies.txt`, `stop_times.txt`, `shapes.txt`); a feed zipped inside a folder fails with
   `missing_file`. Error codes (all URL-free): `http_status_<n>`, `timeout`, `too_large` (download

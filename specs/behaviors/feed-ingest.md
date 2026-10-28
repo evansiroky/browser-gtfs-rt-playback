@@ -35,6 +35,15 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   archive of more than 10,000 entries as `bad_zip`. Only files at the archive's top level are read.
   Rows the loader cannot use (a repeated `trip_id`/`route_id` after the first, malformed dates or
   times, a non-numeric `stop_sequence`) are skipped or treated as absent.
+- **Bytes after the archive are ignored.** Some agencies' tools leave stray bytes after the zip's
+  end-of-central-directory record (for example the remains of an earlier record, from rewriting a
+  file in place without truncating it), and other zip readers accept such files. The archive ends at
+  the end of the last end-of-central-directory record, comment included, found in the final
+  65,557 bytes of the body; where several records fit, one that ends exactly at the end of the body
+  wins. A body with no such record is read as it is and fails as `bad_zip`. This is safe only
+  because feed URLs are the operator's choice
+  ([Security posture](../architecture.md#security-posture)); it must be revisited before users can
+  supply their own.
 - On failure, one automatic retry follows after 30 s. If that also fails, the schedule
   stays `failed` until a start retries it. Realtime polling continues regardless.
 - While the schedule is not ready, realtime snapshots are still collected; only

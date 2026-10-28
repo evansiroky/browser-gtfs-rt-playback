@@ -72,6 +72,47 @@ describe('ZipArchive', () => {
     archive.close();
   });
 
+  describe('bytes after the archive', () => {
+    const files = { 'a.txt': 'hello ' };
+    const open = (bytes: Uint8Array, chunkSize?: number) =>
+      ZipArchive.open(chunked(bytes, chunkSize), new Set(['a.txt']));
+
+    /** The same archive with a comment, as the end record declares it. */
+    function withComment(bytes: Uint8Array, comment: Uint8Array): Uint8Array {
+      const out = Buffer.concat([bytes, comment]);
+      out.writeUInt16LE(comment.length, bytes.length - 2);
+      return out;
+    }
+
+    it('ignores the remains of an older end record, as the MST feed has', async () => {
+      const bytes = zipOf(files);
+      for (const size of [1, 7, undefined]) {
+        const archive = await open(Buffer.concat([bytes, bytes.subarray(-16)]), size);
+        expect(await text(archive, 'a.txt'), `chunks of ${size}`).toBe('hello ');
+        archive.close();
+      }
+    });
+
+    it('ignores bytes after an archive comment', async () => {
+      const bytes = withComment(zipOf(files), Buffer.from('made by hand'));
+      const archive = await open(Buffer.concat([bytes, Buffer.from('trailing junk')]));
+      expect(await text(archive, 'a.txt')).toBe('hello ');
+      archive.close();
+    });
+
+    it('still rejects a body whose end record is not within the last 65 557 bytes', async () => {
+      const bytes = Buffer.concat([zipOf(files), Buffer.alloc(65_558)]);
+      await expect(open(bytes)).rejects.toMatchObject({ code: 'bad_zip' });
+    });
+
+    it('still rejects an archive whose end record is cut short', async () => {
+      const bytes = zipOf(files);
+      await expect(open(bytes.subarray(0, bytes.length - 10))).rejects.toMatchObject({
+        code: 'bad_zip',
+      });
+    });
+  });
+
   it('only finds the GTFS files at the top level of the archive', async () => {
     const nested = Object.fromEntries(
       Object.entries(miniSchedule()).map(([name, content]) => [`feed/${name}`, content]),
