@@ -4,6 +4,7 @@ import { LoadGuard } from './guard.js';
 import { ScheduleLoadError } from './errors.js';
 import { ZipArchive } from './zip.js';
 import { chunked, zipOf } from '../test-support/zip.js';
+import { silentLogger } from '../test-support/logger.js';
 
 const guard = LoadGuard.unlimited(new AbortController().signal);
 const FILES = new Set(['f.txt']);
@@ -12,7 +13,7 @@ async function rows(content: string | Uint8Array, required: string[] = []) {
   const archive = await ZipArchive.open(chunked(zipOf({ 'f.txt': content }), 64), FILES);
   try {
     const out = [];
-    for await (const row of readCsv(archive, 'f.txt', required, guard)) out.push(row);
+    for await (const row of readCsv(archive, 'f.txt', required, guard, silentLogger)) out.push(row);
     return out;
   } finally {
     archive.close();
@@ -103,6 +104,7 @@ describe('readCsv', () => {
           deadlineAt: Infinity,
           now: () => 0,
         }),
+        silentLogger,
       )) {
         seen.push(row['a']!);
         controller.abort();

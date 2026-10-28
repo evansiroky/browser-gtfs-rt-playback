@@ -1,5 +1,6 @@
 import { Transform } from 'node:stream';
 import { CsvError, parse } from 'csv-parse';
+import type { FastifyBaseLogger } from 'fastify';
 import type { ZipArchive } from './zip.js';
 import { ScheduleLoadError } from './errors.js';
 import type { LoadGuard } from './guard.js';
@@ -22,8 +23,48 @@ const MAX_RECORD_BYTES = 1024 * 1024;
  * has inflated more than the guard allows), `timeout` (past the guard's deadline) or `aborted`
  * (the guard's signal). Limits are enforced on the inflated bytes as they stream, not only per
  * row, so a file of blank lines cannot outrun them. The messages name the file, never the feed.
+ *
+ * Logs the read of the file (logging.md "Parsing"): started, then succeeded once the last row has
+ * been yielded, or failed with the error's code. A reader that stops before the end (it reads the
+ * file again, or fails for its own reason such as the memory limit) logs `stopped` instead; the
+ * load's own failure names the cause.
  */
 export async function* readCsv(
+  archive: ZipArchive,
+  file: string,
+  required: readonly string[],
+  guard: LoadGuard,
+  logger: FastifyBaseLogger,
+): AsyncGenerator<Row, void, undefined> {
+  const startedAt = guard.now();
+  logger.info({ file }, 'schedule file read started');
+  let rows = 0;
+  let finished = false;
+  try {
+    for await (const row of readRows(archive, file, required, guard)) {
+      rows++;
+      yield row;
+    }
+    finished = true;
+    logger.info(
+      { file, rows, durationMs: guard.now() - startedAt },
+      'schedule file read succeeded',
+    );
+  } catch (error) {
+    finished = true;
+    const code = error instanceof ScheduleLoadError ? error.code : 'internal_error';
+    const fields = { file, code, durationMs: guard.now() - startedAt };
+    if (code === 'aborted') logger.info(fields, 'schedule file read failed');
+    else logger.warn(fields, 'schedule file read failed');
+    throw error;
+  } finally {
+    if (!finished) {
+      logger.info({ file, durationMs: guard.now() - startedAt }, 'schedule file read stopped');
+    }
+  }
+}
+
+async function* readRows(
   archive: ZipArchive,
   file: string,
   required: readonly string[],

@@ -1,3 +1,4 @@
+import type { FastifyBaseLogger } from 'fastify';
 import type { Clock } from '../clock.js';
 import { boundedFetch } from '../fetch/bounded-fetch.js';
 import type { SecretUrl } from '../secret-url.js';
@@ -10,6 +11,7 @@ export interface ChunkedBody {
 
 export interface DownloadOptions {
   clock: Clock;
+  logger: FastifyBaseLogger;
   timeoutMs: number;
   /** Hard cap on the downloaded bytes; the fetch is aborted as soon as it is crossed. */
   maxBytes: number;
@@ -22,11 +24,18 @@ export interface DownloadOptions {
  */
 export async function downloadSchedule(
   url: SecretUrl,
-  { clock, timeoutMs, maxBytes, signal }: DownloadOptions,
+  { clock, logger, timeoutMs, maxBytes, signal }: DownloadOptions,
 ): Promise<ChunkedBody> {
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for await (const chunk of boundedFetch(url, { clock, timeoutMs, maxBytes, signal })) {
+  for await (const chunk of boundedFetch(url, {
+    clock,
+    logger,
+    feed: 'schedule',
+    timeoutMs,
+    maxBytes,
+    signal,
+  })) {
     chunks.push(chunk);
     size += chunk.byteLength;
   }

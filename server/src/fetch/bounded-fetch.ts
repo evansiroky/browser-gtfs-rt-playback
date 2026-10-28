@@ -1,4 +1,5 @@
 import type { StatusError } from '@gtfs-rt-debugger/shared';
+import type { FastifyBaseLogger } from 'fastify';
 import type { Clock } from '../clock.js';
 import type { SecretUrl } from '../secret-url.js';
 import { isInternalHost } from './internal-host.js';
@@ -27,6 +28,10 @@ export class FetchError extends Error {
 
 export interface BoundedFetchOptions {
   clock: Clock;
+  /** Receives the fetch's start and outcome (logging.md "Fetches"); lines never include the URL. */
+  logger: FastifyBaseLogger;
+  /** Names what is fetched in the log: `vehiclePositions`, `tripUpdates` or `schedule`. */
+  feed: string;
   /** Applies to the whole exchange: connecting, redirects and reading the body. */
   timeoutMs: number;
   /** Limit on the body after any `Content-Encoding` (gzip) is decoded. */
@@ -44,8 +49,11 @@ export interface BoundedFetchOptions {
  */
 export async function* boundedFetch(
   url: SecretUrl,
-  { clock, timeoutMs, maxBytes, signal }: BoundedFetchOptions,
+  { clock, logger, feed, timeoutMs, maxBytes, signal }: BoundedFetchOptions,
 ): AsyncGenerator<Uint8Array, void, undefined> {
+  const startedAt = clock.now();
+  logger.info({ feed }, 'fetch started');
+  let redirects = 0;
   const controller = new AbortController();
   let timedOut = false;
   const timer = clock.setTimeout(() => {
@@ -62,6 +70,12 @@ export async function* boundedFetch(
       : controller.signal.aborted
         ? new FetchError('aborted', 'The fetch was abandoned.')
         : new FetchError('network_error', 'The feed could not be reached.');
+
+  const completed = (status: number, bytes: number) =>
+    logger.info(
+      { feed, status, bytes, redirects, durationMs: clock.now() - startedAt },
+      'fetch completed',
+    );
 
   try {
     const origin = url.reveal();
@@ -104,6 +118,7 @@ export async function* boundedFetch(
         throw new FetchError('redirect_not_allowed', 'The feed redirected to an internal address.');
       }
       target = next;
+      redirects++;
     }
 
     if (!response.ok) {
@@ -113,7 +128,10 @@ export async function* boundedFetch(
         `The feed responded with HTTP ${response.status}.`,
       );
     }
-    if (!response.body) return;
+    if (!response.body) {
+      completed(response.status, 0);
+      return;
+    }
 
     const reader = response.body.getReader();
     let total = 0;
@@ -124,13 +142,22 @@ export async function* boundedFetch(
       } catch {
         throw failure();
       }
-      if (chunk.done) return;
+      if (chunk.done) {
+        completed(response.status, total);
+        return;
+      }
       total += chunk.value.byteLength;
       if (total > maxBytes) {
         throw new FetchError('too_large', `The feed response exceeded ${maxBytes} bytes.`);
       }
       yield chunk.value;
     }
+  } catch (error) {
+    const code = error instanceof FetchError ? error.code : 'internal_error';
+    const fields = { feed, code, durationMs: clock.now() - startedAt };
+    if (code === 'aborted') logger.info(fields, 'fetch failed');
+    else logger.warn(fields, 'fetch failed');
+    throw error;
   } finally {
     clock.clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

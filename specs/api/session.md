@@ -4,6 +4,7 @@ Governs the server's dormant/active state ([session-lifecycle](../behaviors/sess
 These two endpoints are the only ones that count as activity.
 
 ## Endpoints
+
 - `POST /api/v1/session/start` — user-initiated start. Wakes a dormant server regardless of
   why it went dormant; retries a failed schedule load on an active server. The web app
   calls it on page load and from its restart/retry controls.
@@ -16,6 +17,7 @@ a ping leaves the server dormant (check `state`). If the process had shut down, 
 is served by a freshly started one (a slower first response is expected).
 
 ## Response: SessionStatus
+
 ```
 state:           "dormant" | "active"
 endedReason:     "idle" | "max-duration" | null     // why the last activation ended (a restarted
@@ -41,14 +43,18 @@ FeedStatus: {
   error:          { code, message } | null          // most recent failure, cleared on success
 }
 ```
+
 While dormant, all nullable fields are null except `endedReason`, and `schedule.state` is
 `"idle"`.
 
 ## Data endpoints and state
+
 Data endpoints ([dashboard.md](dashboard.md), [trips.md](trips.md)) never wake the server or
 reset the inactivity timer; while dormant they return `409 session_not_active`.
 
 ## Principles
+
 **Inherited**
+
 - [Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience) — data
   reads cannot keep the server awake, so only a page that is actively pinging does.

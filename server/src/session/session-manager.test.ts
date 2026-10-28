@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeClock, settle, toEpochSeconds } from '../clock.js';
 import { FeedPoller } from '../realtime/feed-poller.js';
 import { decodeFeed, SnapshotStore } from '../realtime/snapshot-store.js';
-import { captureLogger } from '../test-support/logger.js';
+import { captureLogger, logEntries } from '../test-support/logger.js';
 import { encodeFeed, serveBytes, startFeedHost, type FeedHost } from '../test-support/feeds.js';
 import type { ScheduleProvider, ScheduleStatus } from './schedule-provider.js';
 import { SessionManager } from './session-manager.js';
@@ -92,6 +92,19 @@ describe('SessionManager', () => {
     const { session } = setup();
     expect(session.status()).toEqual(dormant(null));
     expect(session.active).toBe(false);
+  });
+
+  it('logs each ping and start with the state they arrived in', () => {
+    const { session, logs } = setup();
+    session.ping();
+    session.ping();
+    session.start();
+    const received = logEntries(logs).filter((entry) => /received$/.test(String(entry['msg'])));
+    expect(received.map((entry) => [entry['msg'], entry['state']])).toEqual([
+      ['session ping received', 'dormant'],
+      ['session ping received', 'active'],
+      ['session start received', 'active'],
+    ]);
   });
 
   it('wakes on start: activation times, schedule download begins', () => {

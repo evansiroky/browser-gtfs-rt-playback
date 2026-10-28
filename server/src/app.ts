@@ -10,6 +10,7 @@ import { secretFragments, type Config } from './config.js';
 import { apiPlugin, API_PREFIX, type ApiRoutes, type ServerContext } from './http/api.js';
 import { errorBody, handleApiError } from './http/errors.js';
 import { createDataEndpointGuard } from './http/guards.js';
+import { logApiRequests } from './http/request-log.js';
 import { securityHeaders } from './http/security-headers.js';
 import { hasWebBuild, registerWebApp } from './http/static.js';
 import { redactingDestination, type LogDestination } from './logging.js';
@@ -79,7 +80,7 @@ export async function buildApp<S = undefined>(options: AppOptions<S>): Promise<A
     },
     // Trust one hop (the platform's proxy): the client address is the last X-Forwarded-For entry.
     trustProxy: (_address, hop) => hop === 0,
-    // Per-request lines would be most of the log volume (a ping every 10 s per viewer).
+    // Fastify's own request lines would cover static files too; `logApiRequests` logs `/api` only.
     logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 16 * 1024,
     // Bound slow clients, so neither concurrency nor a graceful drain can be held hostage.
@@ -161,6 +162,7 @@ export async function buildApp<S = undefined>(options: AppOptions<S>): Promise<A
     guard: createDataEndpointGuard(session),
   };
 
+  logApiRequests(app);
   app.addHook('onRequest', async (_request, reply) => {
     reply.headers(headers);
   });

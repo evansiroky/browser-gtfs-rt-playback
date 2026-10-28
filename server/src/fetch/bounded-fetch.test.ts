@@ -5,6 +5,7 @@ import { FakeClock } from '../clock.js';
 import { SecretUrl } from '../secret-url.js';
 import { serveBytes, startFeedHost, type FeedHost, type Handler } from '../test-support/feeds.js';
 import { fetchAll, FetchError, type BoundedFetchOptions } from './bounded-fetch.js';
+import { captureLogger, logEntries, silentLogger } from '../test-support/logger.js';
 
 let host: FeedHost;
 let clock: FakeClock;
@@ -13,7 +14,7 @@ let options: BoundedFetchOptions;
 beforeEach(async () => {
   host = await startFeedHost();
   clock = new FakeClock();
-  options = { clock, timeoutMs: 8_000, maxBytes: 1_000 };
+  options = { clock, logger: silentLogger, feed: 'test', timeoutMs: 8_000, maxBytes: 1_000 };
 });
 afterEach(() => host.close());
 
@@ -178,5 +179,69 @@ describe('fetchAll', () => {
     host.route('/r', redirect('http://feeds.example.invalid/feed'));
     // Resolving the made-up host fails, which proves the redirect was attempted.
     expect((await failure(fetchAll(host.url('/r'), options))).code).toBe('network_error');
+  });
+});
+
+describe('logging', () => {
+  it('logs the start and the completion of a fetch, without the URL', async () => {
+    const logs: string[] = [];
+    host.route('/feed', serveBytes(new Uint8Array([1, 2, 3])));
+    await fetchAll(host.url('/feed?api_key=SECRET'), {
+      ...options,
+      logger: captureLogger(logs),
+      feed: 'tripUpdates',
+    });
+    const entries = logEntries(logs);
+    expect(entries.map((entry) => entry['msg'])).toEqual(['fetch started', 'fetch completed']);
+    expect(entries[0]).toMatchObject({ feed: 'tripUpdates', level: 30 });
+    expect(entries[1]).toMatchObject({
+      feed: 'tripUpdates',
+      status: 200,
+      bytes: 3,
+      redirects: 0,
+      durationMs: 0,
+    });
+    expect(logs.join('\n')).not.toMatch(/api_key|SECRET|127\.0\.0\.1/);
+  });
+
+  it('counts redirects', async () => {
+    const logs: string[] = [];
+    host.route('/r1', redirect('/r2'));
+    host.route('/r2', serveBytes(new Uint8Array([9])));
+    await fetchAll(host.url('/r1'), { ...options, logger: captureLogger(logs) });
+    expect(logEntries(logs).at(-1)).toMatchObject({ msg: 'fetch completed', redirects: 1 });
+  });
+
+  it('logs a failed fetch with its code as a warning', async () => {
+    const logs: string[] = [];
+    await failure(
+      fetchAll(host.url('/missing?api_key=SECRET'), { ...options, logger: captureLogger(logs) }),
+    );
+    const entries = logEntries(logs);
+    expect(entries.map((entry) => entry['msg'])).toEqual(['fetch started', 'fetch failed']);
+    expect(entries[1]).toMatchObject({ feed: 'test', code: 'http_status_404', level: 40 });
+    expect(logs.join('\n')).not.toMatch(/api_key|SECRET|127\.0\.0\.1/);
+  });
+
+  it('logs a fetch abandoned by its caller as information', async () => {
+    const logs: string[] = [];
+    host.route('/slow', () => {});
+    const arrived = host.nextRequest('/slow');
+    const controller = new AbortController();
+    const result = failure(
+      fetchAll(host.url('/slow'), {
+        ...options,
+        logger: captureLogger(logs),
+        signal: controller.signal,
+      }),
+    );
+    await arrived;
+    controller.abort();
+    await result;
+    expect(logEntries(logs).at(-1)).toMatchObject({
+      msg: 'fetch failed',
+      code: 'aborted',
+      level: 30,
+    });
   });
 });

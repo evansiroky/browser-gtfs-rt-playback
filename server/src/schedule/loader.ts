@@ -73,6 +73,7 @@ export class ScheduleLoader implements ScheduleProvider {
       (async (signal) => {
         const body = await downloadSchedule(config.scheduleUrl, {
           clock,
+          logger,
           timeoutMs: config.scheduleTimeoutMs,
           maxBytes: config.scheduleMaxBytes,
           signal,
@@ -83,7 +84,12 @@ export class ScheduleLoader implements ScheduleProvider {
           deadlineAt: clock.now() + PARSE_TIMEOUT_FACTOR * config.scheduleTimeoutMs,
           now: () => clock.now(),
         });
-        return parseSchedule(body, new MemoryBudget(config.scheduleMemoryLimitBytes), guard);
+        return parseSchedule(
+          body,
+          new MemoryBudget(config.scheduleMemoryLimitBytes),
+          guard,
+          logger,
+        );
       });
   }
 

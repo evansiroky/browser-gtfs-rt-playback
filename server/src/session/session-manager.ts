@@ -61,6 +61,7 @@ export class SessionManager {
   }
 
   start(): SessionStatus {
+    this.#options.logger.info({ state: this.#state() }, 'session start received');
     this.#resetIdleTimer();
     if (this.#shutDown) return this.status();
     if (!this.active) this.#wake();
@@ -69,6 +70,7 @@ export class SessionManager {
   }
 
   ping(): SessionStatus {
+    this.#options.logger.info({ state: this.#state() }, 'session ping received');
     this.#resetIdleTimer();
     if (!this.active && !this.#shutDown && this.#endedReason !== 'max-duration') this.#wake();
     return this.status();
@@ -129,6 +131,10 @@ export class SessionManager {
     if (this.#idleTimer) this.#options.clock.clearTimeout(this.#idleTimer);
     this.#idleTimer = null;
     if (this.active) this.#end(null);
+  }
+
+  #state(): 'active' | 'dormant' {
+    return this.active ? 'active' : 'dormant';
   }
 
   /**

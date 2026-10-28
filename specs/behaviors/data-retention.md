@@ -1,10 +1,12 @@
 # Behavior: Data retention
 
 ## Rule
+
 The app never stores more than one hour of realtime data, never writes anything to disk or
 an external store, and forgets everything when it goes dormant or shuts down.
 
 ## Realtime history
+
 - Snapshots (and the pings derived from them) are kept for at most the **retention window**
   — 60 minutes, measured from each snapshot's server receive time. Older ones are discarded
   as new ones arrive, and no later than the next poll tick.
@@ -27,18 +29,22 @@ an external store, and forgets everything when it goes dormant or shuts down.
   holds.
 
 ## Schedule
+
 Held for the life of the activation (not subject to the one-hour window, because it is
 reference data rather than history) and bounded by the download size limit, the schedule
 memory limit, and the reduction rules in [feed-ingest](feed-ingest.md).
 
 ## Forgetting
+
 On shutdown or dormancy ([session-lifecycle](session-lifecycle.md#shutting-down)) the server discards the
 schedule, every snapshot, ping sequences, feed statuses, and any derived caches. After
 that the process holds none of that data; the next activation starts empty. No
 data is written to disk, a database, a cache service, or object storage at any time.
 
 ## Principles
+
 **Inherited**
+
 - [Forget by default](../principles.md#forget-by-default) — the whole behavior.
 - [Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience) — the
   memory limit evicts history early rather than letting memory (and instance size) grow.
