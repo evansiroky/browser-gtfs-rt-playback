@@ -5,6 +5,7 @@ import { FetchError, fetchAll } from '../fetch/bounded-fetch.js';
 import type { SecretUrl } from '../secret-url.js';
 import {
   decodeFeed,
+  headerTimestamp,
   type FeedKind,
   type FeedMessage,
   type SnapshotStore,
@@ -106,19 +107,31 @@ export class FeedPoller {
     let bytes: Uint8Array;
     let message: FeedMessage;
     try {
-      bytes = await fetchAll(url, { clock, timeoutMs, maxBytes, signal: controller.signal });
+      bytes = await fetchAll(url, {
+        clock,
+        logger,
+        feed,
+        timeoutMs,
+        maxBytes,
+        signal: controller.signal,
+      });
+      logger.info({ feed, bytes: bytes.byteLength }, 'realtime parse started');
       try {
         message = decodeFeed(bytes);
       } catch {
+        logger.warn({ feed, code: 'decode_failed' }, 'realtime parse failed');
         throw new FetchError('decode_failed', 'The feed response is not a valid GTFS-RT message.');
       }
+      logger.info(
+        { feed, entities: message.entity.length, feedTimestamp: headerTimestamp(message) },
+        'realtime parse succeeded',
+      );
     } catch (error) {
       if (controller.signal.aborted) return;
       this.#error =
         error instanceof FetchError
           ? error.toStatusError()
           : { code: 'internal_error', message: 'The fetch failed unexpectedly.' };
-      logger.warn({ feed, code: this.#error.code }, 'realtime fetch failed');
       return;
     }
     if (controller.signal.aborted) return;

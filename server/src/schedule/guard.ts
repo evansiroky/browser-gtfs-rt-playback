@@ -41,6 +41,11 @@ export class LoadGuard {
     return this.#bytes;
   }
 
+  /** The guard's clock, for timing the work it limits. */
+  now(): number {
+    return this.#options.now();
+  }
+
   /** Throws `aborted` once the signal aborts, `timeout` once the deadline has passed. */
   check(): void {
     if (this.signal.aborted) throw new ScheduleLoadError('aborted', 'The load was abandoned.');

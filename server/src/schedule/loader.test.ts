@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeClock, toEpochSeconds } from '../clock.js';
 import type { Env } from '../config.js';
 import { startFeedHost, testConfig, type FeedHost } from '../test-support/feeds.js';
-import { captureLogger } from '../test-support/logger.js';
+import { captureLogger, logEntries } from '../test-support/logger.js';
 import { miniSchedule, zipOf } from '../test-support/zip.js';
 import {
   DECOMPRESSION_FACTOR,
@@ -59,6 +59,19 @@ afterEach(async () => {
 });
 
 describe('a successful load', () => {
+  it('logs the download and the parse of a load, never the URL', async () => {
+    loader.start();
+    await untilState('ready');
+    const entries = logEntries(logs);
+    const messages = entries.map((entry) => entry['msg']);
+    expect(messages.slice(0, 2)).toEqual(['fetch started', 'fetch completed']);
+    expect(entries[0]).toMatchObject({ feed: 'schedule' });
+    expect(messages.slice(2, 4)).toEqual(['schedule parse started', 'schedule archive opened']);
+    expect(messages).toContain('schedule file read succeeded');
+    expect(messages.slice(-2)).toEqual(['schedule parse succeeded', 'schedule loaded']);
+    expect(logs.join('\n')).not.toMatch(/SUPERSECRET123|api_key|127\.0\.0\.1/);
+  });
+
   it('goes idle, loading, ready with loadedAt, and serves the store', async () => {
     expect(loader.status()).toEqual({ state: 'idle', loadedAt: null, error: null });
     expect(loader.store).toBeNull();

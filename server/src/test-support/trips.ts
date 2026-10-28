@@ -8,7 +8,7 @@ import { parseSchedule } from '../schedule/parse.js';
 import type { ScheduleStore } from '../schedule/store.js';
 import { TripEngine } from '../trips/engine.js';
 import { PingStore } from '../trips/pings.js';
-import { captureLogger } from './logger.js';
+import { captureLogger, silentLogger } from './logger.js';
 import { chunked, zipOf } from './zip.js';
 
 const { transit_realtime } = GtfsRealtimeBindings;
@@ -114,6 +114,7 @@ export async function loadSchedule(spec: ScheduleSpec): Promise<ScheduleStore> {
     chunked(zipOf(files)),
     new MemoryBudget(1 << 30),
     LoadGuard.unlimited(new AbortController().signal),
+    silentLogger,
   );
 }
 

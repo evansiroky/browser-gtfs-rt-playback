@@ -4,6 +4,7 @@ import { LoadGuard } from './guard.js';
 import { MemoryBudget } from './memory.js';
 import { parseSchedule } from './parse.js';
 import { chunked, miniSchedule, zipOf } from '../test-support/zip.js';
+import { captureLogger, logEntries, silentLogger } from '../test-support/logger.js';
 
 const NOW = new Date('2026-10-14T19:07:42Z');
 const LIMIT = 768 * 1024 * 1024;
@@ -15,6 +16,7 @@ async function parseFixture(chunkSize?: number) {
     chunked(sc.scheduleZip, chunkSize),
     new MemoryBudget(LIMIT),
     guard,
+    silentLogger,
   );
   return { sc, store };
 }
@@ -84,13 +86,18 @@ describe.each([
     expect(store.configurationErrors()).toEqual(sc.expected.configurationErrors);
     expect(store.configurationErrors().length).toBeGreaterThan(0);
     const without = scenario(NOW, { includeMisconfiguredTrip: false });
-    const clean = await parseSchedule(chunked(without.scheduleZip), new MemoryBudget(LIMIT), guard);
+    const clean = await parseSchedule(
+      chunked(without.scheduleZip),
+      new MemoryBudget(LIMIT),
+      guard,
+      silentLogger,
+    );
     expect(clean.configurationErrors()).toEqual([]);
   });
 });
 
 async function load(files: Record<string, string>, limit = LIMIT) {
-  return parseSchedule(chunked(zipOf(files), 512), new MemoryBudget(limit), guard);
+  return parseSchedule(chunked(zipOf(files), 512), new MemoryBudget(limit), guard, silentLogger);
 }
 
 async function failure(promise: Promise<unknown>) {
@@ -339,14 +346,21 @@ describe('agency, routes and trips', () => {
 describe('failures', () => {
   it('rejects a body that is not a zip as bad_zip', async () => {
     const bytes = new TextEncoder().encode('<html>Not Found</html>'.repeat(10));
-    const error = await failure(parseSchedule(chunked(bytes), new MemoryBudget(LIMIT), guard));
+    const error = await failure(
+      parseSchedule(chunked(bytes), new MemoryBudget(LIMIT), guard, silentLogger),
+    );
     expect(error.code).toBe('bad_zip');
   });
 
   it('rejects a truncated zip as bad_zip', async () => {
     const bytes = zipOf(miniSchedule());
     const error = await failure(
-      parseSchedule(chunked(bytes.subarray(0, bytes.length - 40)), new MemoryBudget(LIMIT), guard),
+      parseSchedule(
+        chunked(bytes.subarray(0, bytes.length - 40)),
+        new MemoryBudget(LIMIT),
+        guard,
+        silentLogger,
+      ),
     );
     expect(error.code).toBe('bad_zip');
   });
@@ -359,7 +373,9 @@ describe('failures', () => {
     // The first entry (agency.txt) starts after a 30 + name length header; scramble its data.
     const dataStart = 30 + 'agency.txt'.length;
     for (let i = 0; i < 12; i++) bytes[dataStart + i] = 0xff;
-    const error = await failure(parseSchedule(chunked(bytes), new MemoryBudget(LIMIT), guard));
+    const error = await failure(
+      parseSchedule(chunked(bytes), new MemoryBudget(LIMIT), guard, silentLogger),
+    );
     expect(error.code).toBe('bad_zip');
     expect(error.message).toContain('agency.txt');
   });
@@ -398,6 +414,7 @@ describe('failures', () => {
           deadlineAt: Infinity,
           now: () => 0,
         }),
+        silentLogger,
       ),
     );
     expect(error.code).toBe('aborted');
@@ -656,6 +673,109 @@ describe('frequency_too_dense configuration errors', () => {
     );
     expect(store.configurationErrors()).toEqual([
       { code: 'unusable_stop_times', tripId: 'NOTEMPLATE' },
+    ]);
+  });
+});
+
+describe('logging', () => {
+  const messages = (logs: string[]) =>
+    logEntries(logs).map((entry) => [entry['msg'], entry['file']].filter(Boolean).join(' '));
+
+  it('logs the parse and each file it reads, in order', async () => {
+    const logs: string[] = [];
+    const bytes = zipOf(miniSchedule({ 'stops.txt': 'stop_id\nA\n' }));
+    await parseSchedule(chunked(bytes), new MemoryBudget(LIMIT), guard, captureLogger(logs));
+    expect(messages(logs)).toEqual([
+      'schedule parse started',
+      'schedule archive opened',
+      ...['agency', 'routes', 'trips', 'calendar', 'stop_times', 'shapes'].flatMap((name) => [
+        `schedule file read started ${name}.txt`,
+        `schedule file read succeeded ${name}.txt`,
+      ]),
+      'schedule parse succeeded',
+    ]);
+    const entries = logEntries(logs);
+    expect(entries[0]).toMatchObject({ bytes: bytes.byteLength });
+    expect(entries[1]).toMatchObject({
+      files: [
+        'agency.txt',
+        'routes.txt',
+        'trips.txt',
+        'stop_times.txt',
+        'calendar.txt',
+        'shapes.txt',
+      ],
+    });
+    expect(entries.find((e) => e['file'] === 'stop_times.txt' && e['rows'])).toMatchObject({
+      rows: 2,
+    });
+    expect(entries.at(-1)).toMatchObject({ trips: 1, routes: 1, shapes: 1 });
+  });
+
+  it('logs the file that failed, then the parse', async () => {
+    const logs: string[] = [];
+    const bytes = zipOf(miniSchedule({ 'trips.txt': 'route_id,service_id\nR1,WK\n' }));
+    await failure(
+      parseSchedule(chunked(bytes), new MemoryBudget(LIMIT), guard, captureLogger(logs)),
+    );
+    const entries = logEntries(logs).slice(-2);
+    expect(entries[0]).toMatchObject({
+      msg: 'schedule file read failed',
+      file: 'trips.txt',
+      code: 'invalid_schedule',
+      level: 40,
+    });
+    expect(entries[1]).toMatchObject({
+      msg: 'schedule parse failed',
+      code: 'invalid_schedule',
+      level: 40,
+    });
+  });
+
+  it('logs a file the reader stops reading as stopped, and the parse with the cause', async () => {
+    const logs: string[] = [];
+    await failure(
+      parseSchedule(
+        chunked(zipOf(miniSchedule())),
+        new MemoryBudget(10),
+        guard,
+        captureLogger(logs),
+      ),
+    );
+    const entries = logEntries(logs);
+    expect(entries.find((e) => e['msg'] === 'schedule file read stopped')).toMatchObject({
+      file: 'agency.txt',
+      level: 30,
+    });
+    expect(entries.some((e) => e['msg'] === 'schedule file read failed')).toBe(false);
+    expect(entries.at(-1)).toMatchObject({ msg: 'schedule parse failed', code: 'too_large' });
+  });
+
+  it('logs a body that is not a zip as a failed parse', async () => {
+    const logs: string[] = [];
+    await failure(
+      parseSchedule(
+        chunked(new Uint8Array(100)),
+        new MemoryBudget(LIMIT),
+        guard,
+        captureLogger(logs),
+      ),
+    );
+    expect(messages(logs)).toEqual(['schedule parse started', 'schedule parse failed']);
+  });
+
+  it('logs a shapes file that is not grouped by shape as stopped, then read again', async () => {
+    const logs: string[] = [];
+    const shapes =
+      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n' +
+      'S1,41.0,-87.0,1\nS2,41.0,-87.5,1\nS1,41.1,-87.1,2\n';
+    const bytes = zipOf(miniSchedule({ 'shapes.txt': shapes }));
+    await parseSchedule(chunked(bytes), new MemoryBudget(LIMIT), guard, captureLogger(logs));
+    expect(messages(logs).filter((name) => name.endsWith('shapes.txt'))).toEqual([
+      'schedule file read started shapes.txt',
+      'schedule file read stopped shapes.txt',
+      'schedule file read started shapes.txt',
+      'schedule file read succeeded shapes.txt',
     ]);
   });
 });

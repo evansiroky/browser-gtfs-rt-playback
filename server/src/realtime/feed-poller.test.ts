@@ -2,7 +2,7 @@ import type { ServerResponse } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeClock, toEpochSeconds } from '../clock.js';
-import { captureLogger } from '../test-support/logger.js';
+import { captureLogger, logEntries } from '../test-support/logger.js';
 import { encodeFeed, startFeedHost, type FeedHost } from '../test-support/feeds.js';
 import { FeedPoller } from './feed-poller.js';
 import { SnapshotStore } from './snapshot-store.js';
@@ -264,5 +264,51 @@ describe('FeedPoller', () => {
     }
     expect(rejections).toEqual([]);
     expect(hits).toEqual([0, 10_000, 20_000]);
+  });
+});
+
+describe('logging', () => {
+  const messages = () => logEntries(logs).map((entry) => entry['msg']);
+
+  it('logs the fetch and the parse of a poll', async () => {
+    respondWith(ok(encodeFeed({ timestamp: 1_768_478_000, vehicles: 3 })));
+    poller.start();
+    await settled(1);
+    expect(messages()).toEqual([
+      'fetch started',
+      'fetch completed',
+      'realtime parse started',
+      'realtime parse succeeded',
+    ]);
+    const entries = logEntries(logs);
+    expect(entries[0]).toMatchObject({ feed: 'vehiclePositions' });
+    expect(entries[1]).toMatchObject({ feed: 'vehiclePositions', status: 200 });
+    expect(entries[2]).toMatchObject({ feed: 'vehiclePositions' });
+    expect(entries[3]).toMatchObject({
+      feed: 'vehiclePositions',
+      entities: 3,
+      feedTimestamp: 1_768_478_000,
+    });
+  });
+
+  it('logs a failed fetch with its code and no parse', async () => {
+    respondWith((res) => void res.writeHead(404).end());
+    poller.start();
+    await failed('http_status_404');
+    expect(messages()).toEqual(['fetch started', 'fetch failed']);
+    expect(logEntries(logs)[1]).toMatchObject({ code: 'http_status_404', level: 40 });
+  });
+
+  it('logs a body that cannot be decoded as a failed parse', async () => {
+    respondWith(ok(new TextEncoder().encode('garbage')));
+    poller.start();
+    await failed('decode_failed');
+    expect(messages()).toEqual([
+      'fetch started',
+      'fetch completed',
+      'realtime parse started',
+      'realtime parse failed',
+    ]);
+    expect(logEntries(logs)[3]).toMatchObject({ feed: 'vehiclePositions', code: 'decode_failed' });
   });
 });

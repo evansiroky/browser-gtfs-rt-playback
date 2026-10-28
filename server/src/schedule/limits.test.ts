@@ -5,6 +5,7 @@ import { LoadGuard } from './guard.js';
 import { MemoryBudget } from './memory.js';
 import { parseSchedule } from './parse.js';
 import { ZipArchive } from './zip.js';
+import { silentLogger } from '../test-support/logger.js';
 
 const MiB = 1024 * 1024;
 
@@ -27,7 +28,7 @@ async function drain(content: string, guard: LoadGuard, onRow?: (rows: number) =
   const archive = await openFile(content);
   let rows = 0;
   try {
-    for await (const row of readCsv(archive, 'f.txt', [], guard)) {
+    for await (const row of readCsv(archive, 'f.txt', [], guard, silentLogger)) {
       void row;
       onRow?.(++rows);
     }
@@ -65,10 +66,20 @@ describe('decompressed size cap', () => {
     const total = Object.values(files).reduce((sum, text) => sum + text.length, 0);
     const budget = () => new MemoryBudget(1 << 30);
     await expect(
-      parseSchedule(chunked(bytes), budget(), guardWith({ maxDecompressedBytes: total })),
+      parseSchedule(
+        chunked(bytes),
+        budget(),
+        guardWith({ maxDecompressedBytes: total }),
+        silentLogger,
+      ),
     ).resolves.toBeDefined();
     await expect(
-      parseSchedule(chunked(bytes), budget(), guardWith({ maxDecompressedBytes: total - 1 })),
+      parseSchedule(
+        chunked(bytes),
+        budget(),
+        guardWith({ maxDecompressedBytes: total - 1 }),
+        silentLogger,
+      ),
     ).rejects.toMatchObject({ code: 'too_large' });
   });
 
@@ -76,7 +87,7 @@ describe('decompressed size cap', () => {
     const files = miniSchedule({ 'stops.txt': 'x'.repeat(4 * MiB) });
     const guard = guardWith({ maxDecompressedBytes: 1 * MiB });
     await expect(
-      parseSchedule(chunked(zipOf(files)), new MemoryBudget(1 << 30), guard),
+      parseSchedule(chunked(zipOf(files)), new MemoryBudget(1 << 30), guard, silentLogger),
     ).resolves.toBeDefined();
   });
 });
@@ -99,7 +110,12 @@ describe('abort', () => {
     const files = miniSchedule({
       'trips.txt': 'route_id,service_id,trip_id\n' + '\n'.repeat(64 * MiB),
     });
-    const run = parseSchedule(chunked(zipOf(files)), new MemoryBudget(1 << 30), guard);
+    const run = parseSchedule(
+      chunked(zipOf(files)),
+      new MemoryBudget(1 << 30),
+      guard,
+      silentLogger,
+    );
     setImmediate(() => controller.abort());
     await expect(run).rejects.toMatchObject({ code: 'aborted' });
     expect(guard.bytes).toBeLessThan(32 * MiB);
@@ -146,6 +162,7 @@ describe('frequencies.txt with very many rows', () => {
       chunked(zipOf(files)),
       new MemoryBudget(1 << 30),
       guardWith(),
+      silentLogger,
     );
     expect(store.frequencies('T1')).toHaveLength(60_000);
     // Copying the array per row took over 20 s for this size; linear takes well under a second.

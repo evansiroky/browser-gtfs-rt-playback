@@ -6,6 +6,7 @@ app shows the present and the retained window (at most the last hour), and there
 to ask about another day.
 
 ## List
+
 `GET /api/v1/trips?list=<name>` where `<name>` is `active-with-realtime`,
 `active-without-realtime`, or `unscheduled-with-realtime` — the three lists defined in
 [trip-activity](../behaviors/trip-activity.md#the-three-lists). Missing or unknown `list`, or
@@ -45,6 +46,7 @@ trips: [{
         | "unmatched_start_time" | "outside_scheduled_time" | null   // list 3 only
 }]
 ```
+
 Rows for different instances of one frequency trip share a `tripId` and differ in
 `scheduledStart`. For a list 3 row of a frequency trip, `frequency` describes the row whose
 window contains the reference's start, else null. A trip with a configuration error produces no
@@ -55,6 +57,7 @@ references behind a row carry a `start_time`, `realtime.startTime` is the first,
 positions before trip updates, in feed order.
 
 ## Detail
+
 `GET /api/v1/trips/{tripId}` — `tripId` is percent-encoded. **No query parameters are
 accepted**; any query parameter, `serviceDate` included, → `400 bad_request`. `409` statuses
 as for the list. `404 trip_not_found` when the trip ID is neither in the schedule nor in the latest
@@ -129,6 +132,7 @@ realtime: {
   } | null
 }
 ```
+
 A frequency row that cannot be read ([trip-activity](../behaviors/trip-activity.md#schedule-entries))
 is listed with its columns, `activeNow` false and no active instances, and its unreadable values null.
 Other `VehiclePosition` fields present in the feed are passed through under their GTFS-RT
@@ -138,7 +142,9 @@ latest snapshots hold several trip updates for the trip ID (different instances)
 newest by `timestamp` is returned.
 
 ## Principles
+
 **Inherited**
+
 - [Show the feed as it is](../principles.md#show-the-feed-as-it-is) — schedule rows
   (trip, route, frequency) are returned column-for-column and realtime fields pass through
   untouched.

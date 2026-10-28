@@ -9,15 +9,15 @@ Governing principle: [Cost ceiling beats convenience](principles.md#cost-ceiling
 
 ## Resources (managed by Terraform)
 
-| Resource | Rule |
-|---|---|
-| Cloud Run service | One service. **Max instances 1** (one process holds all state in memory, so never more than one serves at a time; the limit is per revision, so during a deploy the old and new revision may briefly overlap, and the new one starts empty), **min instances 0**, **CPU always allocated** (the 10 s poller runs between requests), 1 vCPU and 2 GiB memory, request concurrency 80, the container listening on port 8080 (the server default `PORT`). Region default `us-west1`, a single variable. |
-| Public access | The service is invokable by anyone without authentication (it is a public site). |
-| Runtime service account | Dedicated; its only grant is access to the feed-URL secrets. No project-level roles. |
-| Secret Manager secrets | One secret per feed URL (schedule, vehicle positions, trip updates). Cloud Run cannot create a service whose secret has no version, so Terraform creates each secret with a **placeholder** first version (a syntactically valid URL on a reserved `.invalid` host, never a real value); the operator then adds the real URL as a new version (`gcloud secrets versions add`), which the service reads at its next start. Terraform never manages the real versions, so feed URLs and any embedded keys never enter Terraform state, variables, or CI logs. The service reads the secrets as environment variables (`latest` version). |
-| Artifact Registry | One Docker repository in the same region, with a cleanup policy keeping only the most recent images. |
-| Billing budget | A budget on the project with alert thresholds at 50 %, 90 %, and 100 % of a monthly amount (variable, default 25 USD), delivered to billing administrators. |
-| Non-secret configuration | The tunables in [behaviors/configuration.md](behaviors/configuration.md#tunables-and-defaults) are Terraform variables passed to the service as environment variables, with exit-on-idle on. |
+| Resource                 | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloud Run service        | One service. **Max instances 1** (one process holds all state in memory, so never more than one serves at a time; the limit is per revision, so during a deploy the old and new revision may briefly overlap, and the new one starts empty), **min instances 0**, **CPU always allocated** (the 10 s poller runs between requests), 1 vCPU and 2 GiB memory, request concurrency 80, the container listening on port 8080 (the server default `PORT`). Region default `us-west1`, a single variable.                                                                                                                                   |
+| Public access            | The service is invokable by anyone without authentication (it is a public site).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Runtime service account  | Dedicated; its only grant is access to the feed-URL secrets. No project-level roles.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Secret Manager secrets   | One secret per feed URL (schedule, vehicle positions, trip updates). Cloud Run cannot create a service whose secret has no version, so Terraform creates each secret with a **placeholder** first version (a syntactically valid URL on a reserved `.invalid` host, never a real value); the operator then adds the real URL as a new version (`gcloud secrets versions add`), which the service reads at its next start. Terraform never manages the real versions, so feed URLs and any embedded keys never enter Terraform state, variables, or CI logs. The service reads the secrets as environment variables (`latest` version). |
+| Artifact Registry        | One Docker repository in the same region, with a cleanup policy keeping only the most recent images.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Billing budget           | A budget on the project with alert thresholds at 50 %, 90 %, and 100 % of a monthly amount (variable, default 25 USD), delivered to billing administrators.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Non-secret configuration | The tunables in [behaviors/configuration.md](behaviors/configuration.md#tunables-and-defaults) are Terraform variables passed to the service as environment variables, with exit-on-idle on.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Terraform ignores changes to the service's container image: the image is owned by the
 deploy pipeline ([deployment.md](deployment.md)), and an infrastructure apply must never roll
@@ -27,6 +27,7 @@ Terraform state lives in a versioned Cloud Storage bucket created by bootstrap, 
 fixed prefix for this project.
 
 ## Cost guards
+
 The configuration above is the cost ceiling: one instance, scale to zero, the process exits
 15 minutes after the last browser ping ([session-lifecycle](behaviors/session-lifecycle.md#shutting-down)),
 and a 2-hour cap per activation. The worst case is one instance running continuously (about
@@ -37,12 +38,14 @@ negligible by design: image cleanup policy, 3 secrets, one small bucket, default
 retention.
 
 ## Bootstrap and teardown scripts
+
 The scripts do exactly what Terraform cannot do for itself, so they are not Terraform. Both
 are POSIX-friendly bash with strict error handling, take their inputs as flags with
 environment-variable fallbacks (project ID, region, GitHub `owner/repo`), print every
 action before running it, and need only `gcloud` (teardown also runs `terraform destroy`, so it needs `terraform` unless told to skip that step).
 
 ### `scripts/bootstrap.sh`
+
 Run once by the operator, authenticated as a project owner, on a project they created.
 Idempotent — re-running after a partial failure completes what is missing and changes
 nothing that exists. It:
@@ -77,6 +80,7 @@ The deploy identity and its bindings are created by Terraform, not by the script
 ([deployment.md](deployment.md#identities)).
 
 ### `scripts/teardown.sh`
+
 The escape hatch when something goes wrong, and the way to remove the app entirely. Safe to
 re-run and tolerant of partial states: a resource that is already gone is skipped, not an
 error. It:
@@ -94,18 +98,22 @@ error. It:
 5. Never touches resources it did not create.
 
 ## Order of operations for the operator
+
 `create project` → `link billing` → `scripts/bootstrap.sh` → set GitHub repository variables
 → first `terraform apply` (local, placeholder image) → add secret values → merge to `main`
 (pipeline deploys). To undo: `scripts/teardown.sh`.
 
 ## Principles
+
 **Inherited**
+
 - [Cost ceiling beats convenience](principles.md#cost-ceiling-beats-convenience) — single
   instance, scale to zero, budget alerts, cleanup policies, and a teardown path.
 - [The server fetches](principles.md#the-server-fetches-the-browser-never-talks-to-feed-hosts)
   — feed URLs are secrets and stay out of state, variables, and logs.
 
 **Local**
+
 - **Never adopt what you did not create.** Bootstrap labels the state bucket only when it
   creates it (or finds it empty, as after an interrupted run); a non-empty bucket without the
   label is someone else's and is refused, because the label is what authorizes teardown to

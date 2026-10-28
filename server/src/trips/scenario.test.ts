@@ -7,6 +7,7 @@ import { chunked } from '../test-support/zip.js';
 import { expectScenario } from '../test-support/expected-rows.js';
 import { harness } from '../test-support/trips.js';
 import { decodeFeed } from '../realtime/snapshot-store.js';
+import { silentLogger } from '../test-support/logger.js';
 
 const TIMEZONE = 'America/Los_Angeles';
 
@@ -15,6 +16,7 @@ async function engineFor(sc: Scenario) {
     chunked(sc.scheduleZip),
     new MemoryBudget(1 << 30),
     LoadGuard.unlimited(new AbortController().signal),
+    silentLogger,
   );
   const h = harness({ now: sc.now, store });
   h.snapshots.add('vehiclePositions', sc.vehiclePositions, decodeFeed(sc.vehiclePositions));

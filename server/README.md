@@ -140,7 +140,11 @@ and query values) before writing.
   address; IPv6 clients are keyed by /64. At most 10 000 clients get their own window; expired
   ones are swept oldest-first in amortized O(1). When all slots are live, new clients share one
   overflow window, so a flood of fresh addresses can never reset an already-limited client.
-- **Logging.** JSON (pino) to stdout; per-request lines are disabled to keep log volume flat.
+- **Logging.** JSON (pino) to stdout, as specified in `specs/behaviors/logging.md`: every fetch
+  (`fetch started` / `completed` / `failed`), the realtime and schedule parses and each schedule
+  file read, session pings and starts, and `/api` requests (`api request received`, `api response
+sent`, `api request aborted`, paired by `reqId`). Static files are not logged; Fastify's own
+  request lines are off. Lines never carry a feed URL, a query string or a client address.
 - **Static.** Files present in `WEB_DIST_DIR` at startup are served (`/assets/*` as immutable,
   everything else `no-cache`). Any other `GET`/`HEAD` outside `/api` returns `index.html`, except
   a missing static file (anything under `/assets/`, or a top-level name with an extension such as

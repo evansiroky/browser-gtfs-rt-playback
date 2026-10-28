@@ -1,12 +1,14 @@
 # Behavior: Session lifecycle
 
 ## Rule
+
 The server is either **dormant** (holding no data, fetching nothing) or **active**
 (ingesting). Browser pings move it between the two, and 15 minutes without a ping shuts it
 down entirely. There is one server-wide activation
 shared by every visitor — not one per browser.
 
 ## States
+
 - **dormant** — no schedule, no snapshots, no ingestion timers. Holds only the reason the
   last activation ended (`max-duration`, or none if there has been no activation since the
   process started). A process that shuts down on idle exits, so it never lingers dormant
@@ -15,6 +17,7 @@ shared by every visitor — not one per browser.
   feeds are being polled.
 
 ## Waking
+
 A **start** wakes a dormant server unconditionally and begins an activation. A **ping**
 wakes a dormant server unless the last activation ended by `max-duration`. Waking:
 
@@ -27,6 +30,7 @@ Starting or pinging an already-active server does not restart anything. A **star
 while the schedule load has failed retries the schedule load (once per start).
 
 ## Staying awake
+
 Every ping and start resets the **inactivity timer**, in every state (including dormant).
 The web app sends a ping every 10 seconds only while its page is engaged — visible and
 interacted with in the last minute — so hidden or untouched pages do not keep the server
@@ -36,6 +40,7 @@ Reading data endpoints does **not** reset the timer; only the session endpoints 
 ([api/session.md](../api/session.md)).
 
 ## Shutting down
+
 The server **shuts down** when no ping or start has arrived for the idle timeout (default
 15 minutes), in whatever state it is in:
 
@@ -49,6 +54,7 @@ The server **shuts down** when no ping or start has arrived for the idle timeout
    (local development) the process stays up, dormant.
 
 ## Maximum duration
+
 Independently, an activation that has lasted the maximum activation duration (default 2 h)
 since it began ends regardless of ongoing pings: the server goes **dormant** — discarding
 everything exactly as in step 2 above, with ending reason `max-duration` — but the process
@@ -61,12 +67,15 @@ and offers a restart control, and the lock holds for as long as pings keep arriv
 pings stop for the idle timeout the process shuts down as above, which also clears the lock.
 
 ## Concurrent visitors
+
 All browsers observe the same activation. A second visitor arriving mid-activation sees the
 data already accumulated; it does not trigger a second schedule download. The maximum
 duration is measured from the activation's start, not from the latest visitor's arrival.
 
 ## Principles
+
 **Inherited**
+
 - [Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience) — the
   maximum-duration cap and the no-auto-rewake rule exist so an unattended tab cannot
   generate unbounded spend.

@@ -1,3 +1,4 @@
+import type { FastifyBaseLogger } from 'fastify';
 import { ServiceCalendar } from './calendar.js';
 import { readCsv } from './csv.js';
 import type { ChunkedBody } from './download.js';
@@ -85,6 +86,7 @@ async function readAgency(
   archive: ZipArchive,
   budget: MemoryBudget,
   guard: LoadGuard,
+  logger: FastifyBaseLogger,
 ): Promise<{ names: string[]; timezone: string }> {
   const names: string[] = [];
   let timezone: string | null = null;
@@ -93,6 +95,7 @@ async function readAgency(
     'agency.txt',
     ['agency_name', 'agency_timezone'],
     guard,
+    logger,
   )) {
     const name = row['agency_name'] ?? '';
     budget.add(stringBytes(name) + ARRAY_SLOT_BYTES);
@@ -115,9 +118,10 @@ async function readRoutes(
   archive: ZipArchive,
   budget: MemoryBudget,
   guard: LoadGuard,
+  logger: FastifyBaseLogger,
 ): Promise<Map<string, Row>> {
   const routes = new Map<string, Row>();
-  for await (const row of readCsv(archive, 'routes.txt', ['route_id'], guard)) {
+  for await (const row of readCsv(archive, 'routes.txt', ['route_id'], guard, logger)) {
     const id = row['route_id'];
     if (!id || routes.has(id)) continue;
     budget.add(rowBytes(row) + stringBytes(id) + MAP_SLOT_BYTES);
@@ -130,9 +134,10 @@ async function readTrips(
   archive: ZipArchive,
   budget: MemoryBudget,
   guard: LoadGuard,
+  logger: FastifyBaseLogger,
 ): Promise<Map<string, MutableTrip>> {
   const trips = new Map<string, MutableTrip>();
-  for await (const row of readCsv(archive, 'trips.txt', ['trip_id', 'service_id'], guard)) {
+  for await (const row of readCsv(archive, 'trips.txt', ['trip_id', 'service_id'], guard, logger)) {
     const id = row['trip_id'];
     if (!id || trips.has(id)) continue;
     budget.add(rowBytes(row) + stringBytes(id) + MAP_SLOT_BYTES + TRIP_BYTES);
@@ -145,18 +150,19 @@ async function readCalendar(
   archive: ZipArchive,
   budget: MemoryBudget,
   guard: LoadGuard,
+  logger: FastifyBaseLogger,
 ): Promise<ServiceCalendar> {
   const calendar = new ServiceCalendar();
   if (archive.has('calendar.txt')) {
     const required = ['service_id', 'start_date', 'end_date'];
-    for await (const row of readCsv(archive, 'calendar.txt', required, guard)) {
+    for await (const row of readCsv(archive, 'calendar.txt', required, guard, logger)) {
       const serviceId = calendar.addWeekly(row);
       if (serviceId !== null) budget.add(WEEKLY_SERVICE_BYTES + stringBytes(serviceId));
     }
   }
   if (archive.has('calendar_dates.txt')) {
     const required = ['service_id', 'date', 'exception_type'];
-    for await (const row of readCsv(archive, 'calendar_dates.txt', required, guard)) {
+    for await (const row of readCsv(archive, 'calendar_dates.txt', required, guard, logger)) {
       const { newServiceId, kept } = calendar.addException(row);
       if (newServiceId !== null) {
         budget.add(EXCEPTION_SERVICE_BYTES + stringBytes(newServiceId));
@@ -173,9 +179,10 @@ async function readFrequencies(
   trips: Map<string, MutableTrip>,
   budget: MemoryBudget,
   guard: LoadGuard,
+  logger: FastifyBaseLogger,
 ): Promise<void> {
   if (!archive.has('frequencies.txt')) return;
-  for await (const row of readCsv(archive, 'frequencies.txt', ['trip_id'], guard)) {
+  for await (const row of readCsv(archive, 'frequencies.txt', ['trip_id'], guard, logger)) {
     const trip = trips.get(row['trip_id'] ?? '');
     if (!trip) continue;
     if (trip.frequencies === NO_ROWS) {
@@ -235,10 +242,11 @@ async function readTemplates(
   trips: Map<string, MutableTrip>,
   budget: MemoryBudget,
   guard: LoadGuard,
+  logger: FastifyBaseLogger,
 ): Promise<void> {
   const seen = new Map<string, StopTimes>();
   const columns = ['trip_id', 'stop_sequence'];
-  for await (const row of readCsv(archive, 'stop_times.txt', columns, guard)) {
+  for await (const row of readCsv(archive, 'stop_times.txt', columns, guard, logger)) {
     const trip = trips.get(row['trip_id'] ?? '');
     if (!trip) continue;
     const seq = parseSequence(row['stop_sequence']);
@@ -275,7 +283,8 @@ async function readTemplates(
 
 /**
  * Reduces a downloaded GTFS Schedule zip to the retained data (feed-ingest.md "Schedule"),
- * streaming every file and charging what it keeps to `budget`.
+ * streaming every file and charging what it keeps to `budget`. Logs the parse and each file it
+ * reads (logging.md "Parsing").
  *
  * Throws `ScheduleLoadError`: `bad_zip`, `missing_file` (names the file), `bad_csv`,
  * `invalid_schedule` (a required column or the agency timezone is missing), `too_large`
@@ -286,16 +295,43 @@ export async function parseSchedule(
   body: ChunkedBody,
   budget: MemoryBudget,
   guard: LoadGuard,
+  logger: FastifyBaseLogger,
+): Promise<ScheduleStore> {
+  const startedAt = guard.now();
+  logger.info({ bytes: body.size }, 'schedule parse started');
+  try {
+    const store = await reduceSchedule(body, budget, guard, logger);
+    logger.info(
+      { durationMs: guard.now() - startedAt, ...store.counts() },
+      'schedule parse succeeded',
+    );
+    return store;
+  } catch (error) {
+    const code = error instanceof ScheduleLoadError ? error.code : 'internal_error';
+    const fields = { code, durationMs: guard.now() - startedAt };
+    if (code === 'aborted') logger.info(fields, 'schedule parse failed');
+    else logger.warn(fields, 'schedule parse failed');
+    throw error;
+  }
+}
+
+async function reduceSchedule(
+  body: ChunkedBody,
+  budget: MemoryBudget,
+  guard: LoadGuard,
+  logger: FastifyBaseLogger,
 ): Promise<ScheduleStore> {
   const archive = await ZipArchive.open(body, READ_FILES);
   try {
     checkRequiredFiles(archive);
-    const agency = await readAgency(archive, budget, guard);
-    const routes = await readRoutes(archive, budget, guard);
-    const trips = await readTrips(archive, budget, guard);
-    const calendar = await readCalendar(archive, budget, guard);
-    await readFrequencies(archive, trips, budget, guard);
-    await readTemplates(archive, trips, budget, guard);
+    const files = [...READ_FILES].filter((name) => archive.has(name));
+    logger.info({ files }, 'schedule archive opened');
+    const agency = await readAgency(archive, budget, guard, logger);
+    const routes = await readRoutes(archive, budget, guard, logger);
+    const trips = await readTrips(archive, budget, guard, logger);
+    const calendar = await readCalendar(archive, budget, guard, logger);
+    await readFrequencies(archive, trips, budget, guard, logger);
+    await readTemplates(archive, trips, budget, guard, logger);
     const shapes = archive.has('shapes.txt')
       ? await encodeShapes(
           () =>
@@ -304,6 +340,7 @@ export async function parseSchedule(
               'shapes.txt',
               ['shape_id', 'shape_pt_lat', 'shape_pt_lon', 'shape_pt_sequence'],
               guard,
+              logger,
             ),
           budget,
         )

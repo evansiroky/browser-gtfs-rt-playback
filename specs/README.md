@@ -1,6 +1,6 @@
 # Specs
 
-`specs/` declares what gtfs-rt-debugger *should* do. It is authoritative for the
+`specs/` declares what gtfs-rt-debugger _should_ do. It is authoritative for the
 life of the system: implementation is brought into conformance with it, and spec↔code drift
 is a bug. Work in flight lives in [`plans/`](../plans/README.md); the issue tracker is the
 backlog. The full methodology is in the specops skill (`.claude/skills/specops/SKILL.md`).

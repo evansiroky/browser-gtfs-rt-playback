@@ -5,6 +5,7 @@ import { LoadGuard } from './guard.js';
 import { MemoryBudget } from './memory.js';
 import { parseSchedule } from './parse.js';
 import { ZipArchive } from './zip.js';
+import { silentLogger } from '../test-support/logger.js';
 
 const guard = LoadGuard.unlimited(new AbortController().signal);
 
@@ -50,6 +51,7 @@ describe('ZipArchive', () => {
       chunked(streamingZip(files, stored), 4096),
       new MemoryBudget(1 << 30),
       guard,
+      silentLogger,
     );
     expect(store.counts()).toMatchObject({ trips: 1, routes: 1, shapes: 1 });
     expect(store.template('T1')).toEqual({ startSecs: 28_800, endSecs: 30_600 });
@@ -75,7 +77,7 @@ describe('ZipArchive', () => {
       Object.entries(miniSchedule()).map(([name, content]) => [`feed/${name}`, content]),
     );
     await expect(
-      parseSchedule(chunked(zipOf(nested)), new MemoryBudget(1 << 30), guard),
+      parseSchedule(chunked(zipOf(nested)), new MemoryBudget(1 << 30), guard, silentLogger),
     ).rejects.toMatchObject({ code: 'missing_file' });
   });
 });

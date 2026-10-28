@@ -1,10 +1,12 @@
 # Behavior: Feed ingest
 
 ## Rule
+
 While active, the server downloads the GTFS Schedule once and polls each configured
 realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concurrency.
 
 ## Schedule
+
 - Downloaded **once per activation**, at wake. Not refreshed during the activation.
 - Fetched with the schedule fetch timeout; aborted if the body exceeds the download size
   limit. Streamed — the zip is never fully buffered as one contiguous allocation beyond
@@ -49,6 +51,7 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   `shape_id` absent from `shapes.txt` are kept and simply have no geometry.
 
 ## Realtime
+
 - Each configured feed is fetched every poll interval (default 10 s), on its own timer,
   starting immediately at wake. Cadence is fixed: a slow or failed fetch does not shift the
   next tick, and a tick is skipped (not queued) while the previous fetch for that feed is
@@ -68,12 +71,15 @@ realtime feed on a fixed cadence. Ingestion is bounded in time, size, and concur
   Responses may be gzip-encoded.
 
 ## Never exposed
+
 No error message, status field, or log line includes a feed URL or its query string.
 Errors are reported as a code and a generic message (for example `http_status_404`,
 `timeout`, `too_large`, `decode_failed`).
 
 ## Principles
+
 **Inherited**
+
 - [The server fetches](../principles.md#the-server-fetches-the-browser-never-talks-to-feed-hosts)
   — this behavior is the only place feed hosts are contacted.
 - [Cost ceiling beats convenience](../principles.md#cost-ceiling-beats-convenience) — one
